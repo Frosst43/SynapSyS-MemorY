@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "synapsys-memory": {
+      "type": "local",
+      "command": ["/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp"],
+      "enabled": true,
+      "environment": {
+        "SYMEM_SPACE": "shared",
+        "SYMEM_PROJECT": "demo"
+      }
+    }
+  }
+}
