@@ -74,6 +74,66 @@ No conceder DELETE por defecto. Cada sesion de un mismo cliente
 puede tener grants distintos. No equivale a afirmar que estos
 sandbox ya existen o estan activados.
 
+## Cambio exclusivo de proyecto: Qwen SYPminer/Terminal PRO -> SynapSyS
+
+**Requisito obligatorio confirmado por el propietario**: cuando Qwen este
+trabajando en SYPminer/Terminal PRO y se solicite trabajar en SynapSyS,
+la peticion en lenguaje natural es solo un intento de cambio, NUNCA una
+autorizacion suficiente por si misma.
+
+1. El controlador confiable de sesiones debe solicitar autorizacion
+   explicita al usuario, fuera del canal manipulable por la IA.
+2. Antes de conceder acceso a SynapSyS, debe **revocar por completo**
+   los permisos de memoria, lectura, escritura, borrado, administracion,
+   herramientas y filesystem sobre SYPminer/Terminal PRO. No dejar
+   simultaneamente ambos proyectos autorizados en esa sesion.
+3. Cerrar/drenar operaciones pendientes; invalidar el contexto y credenciales
+   anteriores y terminar/reiniciar el proceso del agente si sus permisos
+   de disco o MCP no pueden cambiarse de modo atomico y verificable.
+4. Crear una **sesion nueva** ligada solo al proyecto SynapSyS, con
+   nuevos permisos acotados y sandbox de archivos propio. Comprobar
+   autorizacion antes de ejecutar cualquier herramienta.
+5. Si el usuario no concede permisos, la transicion falla cerrada:
+   sin acceso nuevo a SynapSyS; no hay elevacion de permisos.
+6. El retorno a SYPminer/Terminal PRO requiere un nuevo cambio autorizado
+   y la misma revocacion en orden inverso.
+7. No mezclar resultados de memoria, directorios, caches, ficheros
+   temporales, logs, adjuntos o contextos de sesiones antiguas. Una
+   memoria compartida deliberada requiere permiso aparte y trazabilidad.
+8. Nunca asumir que cambiar `SYMEM_PROJECT`, `cwd` o un prompt
+   basta para revocar capacidades. Usar un broker confiable que mantenga
+   grants de sesion y un sandbox de sistema operativo para archivos.
+   Prohibir al propio agente modificar el controlador de permisos.
+9. Registros de auditoria: sesion, identidad de cliente, proyecto
+   de origen/destino, momento, decisor, resultado y version de grants,
+   sin registrar secretos.
+
+**Ejemplo de matriz por sesion** (estado deseado, no implementado):
+
+| Estado | Memoria SYPminer | Memoria SynapSyS | Archivos SYPminer | Archivos SynapSyS |
+| --- | --- | --- | --- | --- |
+| Qwen en SYPminer | autorizada | denegada | autorizados segun sandbox | denegados |
+| Cambio pendiente | sin elevar permisos | denegada | sin nuevas operaciones | denegados |
+| Qwen en SynapSyS (tras autorizacion) | denegada | autorizada | denegados | autorizados segun sandbox |
+
+### Pruebas obligatorias del cambio
+
+- Qwen no puede acceder a memorias ni archivos SynapSyS antes de la
+  autorizacion aunque escriba el nombre del proyecto en una llamada.
+- Cambio aprobado: una lectura/escritura de SynapSyS funciona y
+  toda operacion de memoria/archivos SYPminer falla.
+- Una herramienta que se inicia justo antes o durante el cambio
+  no sigue ejecutando acciones de SYPminer tras revocacion.
+- Reusar una sesion antigua, token, variable de entorno, ruta absoluta
+  o symlink no recupera accesos anteriores.
+- Denegacion o fallo del controlador: no se abre el proyecto nuevo.
+- Para volver a SYPminer hay que repetir el procedimiento; no
+  existen permisos residuales de SynapSyS.
+
+**Estado:** pendiente de desarrollo del controlador/sandbox y de pruebas
+de extremo a extremo; las capacidades MCP actuales por proceso no
+garantizan la revocacion fuerte.
+
 ## Bloqueo de salida v0.2 -> estable
 
 NO fusionar ni declarar el aislamiento seguro hasta:
