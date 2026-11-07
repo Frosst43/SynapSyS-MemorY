@@ -3,11 +3,16 @@
   "mcp": {
     "synapsys-memory": {
       "type": "local",
-      "command": ["/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp"],
+      "command": [
+        "/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp"
+      ],
       "enabled": true,
       "environment": {
+        "SYMEM_DB": "/RUTA/PRIVADA/memory.sqlite3",
         "SYMEM_SPACE": "shared",
-        "SYMEM_PROJECT": "demo"
+        "SYMEM_PROJECT": "demo",
+        "SYMEM_CLIENT": "opencode",
+        "SYMEM_RIGHTS": "read,write"
       }
     }
   }
