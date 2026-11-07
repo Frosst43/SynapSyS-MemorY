@@ -17,6 +17,13 @@ import time
 from typing import Any
 from uuid import uuid4
 
+SCHEMA_VERSION = 2
+
+
+class MemoryConflictError(RuntimeError):
+    """Version del recuerdo cambiada desde la ultima lectura del cliente."""
+
+
 KINDS = frozenset({"fact", "decision", "preference", "episode", "summary", "task"})
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,95}$")
 _WORD = re.compile(r"\w+", flags=re.UNICODE)
@@ -82,6 +89,7 @@ def _public(row: sqlite3.Row) -> dict[str, Any]:
         "tags": json.loads(row["tags_json"]),
         "source": row["source"],
         "importance": row["importance"],
+        "revision": row["revision"],
         "created_ms": row["created_ms"],
         "updated_ms": row["updated_ms"],
         "expires_ms": row["expires_ms"],
@@ -101,7 +109,9 @@ class MemoryStore:
         *,
         space: str = "personal",
         project: str = "",
+        actor: str = "local",
     ) -> None:
+        self.actor = _scope(actor, "actor")
         self.space = _scope(space, "space")
         self.project = _scope(project, "project", optional=True)
         self.path = Path(path or os.environ.get("SYMEM_DB", _DEFAULT_DB)).expanduser()
@@ -116,12 +126,17 @@ class MemoryStore:
         if os.name == "posix":
             os.chmod(self.path, 0o600)
         with self._lock:
+            version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+            if version > SCHEMA_VERSION:
+                self._db.close()
+                raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
             self._db.execute("PRAGMA busy_timeout=5000")
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.execute("PRAGMA secure_delete=ON")
             self._db.execute("PRAGMA foreign_keys=ON")
             self._create_schema()
+            self._migrate()
 
     def _create_schema(self) -> None:
         with self._db:
@@ -167,6 +182,59 @@ class MemoryStore:
                     VALUES(new.row_id, new.title, new.body, new.tags_json);
                 END;
             """)
+
+    def _migrate(self) -> None:
+        """Actualizacion no destructiva v0.1 (user_version=0) -> v0.2.
+
+        Mantiene las tablas y registros anteriores. Nuevos eventos auditables
+        no incluyen el cuerpo, para no resucitar contenido tras un borrado.
+        """
+        version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+        if version > SCHEMA_VERSION:
+            raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
+        if version < 2:
+            with self._db:
+                self._db.execute("ALTER TABLE memories ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
+                self._db.execute("""
+                    CREATE TABLE IF NOT EXISTS memory_events (
+                        event_id INTEGER PRIMARY KEY,
+                        uid TEXT NOT NULL,
+                        space TEXT NOT NULL,
+                        project TEXT NOT NULL,
+                        action TEXT NOT NULL CHECK(action IN ('create','update','delete')),
+                        revision INTEGER NOT NULL,
+                        actor TEXT NOT NULL,
+                        occurred_ms INTEGER NOT NULL
+                    )
+                """)
+                self._db.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_memory_events_scope
+                    ON memory_events(space, project, uid, event_id)
+                """)
+                self._db.execute("PRAGMA user_version=2")
+
+    def _audit(self, uid: str, action: str, revision: int) -> None:
+        self._db.execute("""
+            INSERT INTO memory_events(uid, space, project, action, revision, actor, occurred_ms)
+            VALUES(?,?,?,?,?,?,?)
+        """, (uid, self.space, self.project, action, revision, self.actor, _now_ms()))
+
+    def audit(self, uid: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Registro de cambios de una memoria; deliberadamente sin contenido."""
+        uid = _text(uid, "id", 100)
+        _validate_limit(limit)
+        with self._lock:
+            rows = self._db.execute("""
+                SELECT uid, action, revision, actor, occurred_ms FROM memory_events
+                WHERE uid=? AND space=? AND project=?
+                ORDER BY event_id DESC LIMIT ?
+            """, (uid, self.space, self.project, limit)).fetchall()
+        return [dict(row) for row in rows]
+
+    def check_integrity(self) -> bool:
+        """Comprobacion basica de SQLite; no comprueba el indice FTS externo."""
+        with self._lock:
+            return self._db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
     def __enter__(self) -> "MemoryStore":
         return self
@@ -224,6 +292,8 @@ class MemoryStore:
                 importance, now, now, _expiry(ttl_days, now), fingerprint,
             ))
             created = cursor.rowcount == 1
+            if created:
+                self._audit(uid, "create", 1)
             actual = self.get(uid) if created else _public(self._db.execute(
                 "SELECT * FROM memories WHERE space=? AND project=? AND fingerprint=?",
                 (self.space, self.project, fingerprint),
@@ -240,14 +310,24 @@ class MemoryStore:
             """, (uid, self.space, self.project, _now_ms())).fetchone()
             return _public(row) if row is not None else None
 
-    def forget(self, uid: str) -> bool:
+    def forget(self, uid: str, *, expected_revision: int | None = None) -> bool:
         uid = _text(uid, "id", 100)
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+            raise ValueError("expected_revision debe ser un entero positivo")
         with self._lock, self._db:
+            current = self.get(uid)
+            if current is None:
+                return False
+            if expected_revision is not None and current["revision"] != expected_revision:
+                raise MemoryConflictError("Revision distinta; recupera de nuevo el recuerdo")
             cursor = self._db.execute(
-                "DELETE FROM memories WHERE uid=? AND space=? AND project=?",
-                (uid, self.space, self.project),
+                "DELETE FROM memories WHERE uid=? AND space=? AND project=? AND revision=?",
+                (uid, self.space, self.project, current["revision"]),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount == 1:
+                self._audit(uid, "delete", current["revision"])
+                return True
+            raise MemoryConflictError("Cambio concurrente; reintenta tras recuperar")
 
     def update(
         self,
@@ -257,6 +337,7 @@ class MemoryStore:
         title: str = "",
         importance: int | None = None,
         tags: list[str] | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any] | None:
         uid = _text(uid, "id", 100)
         body = _text(body, "body", 20_000)
@@ -265,24 +346,32 @@ class MemoryStore:
         title = _text(title, "title", 160) if title.strip() else body[:100].splitlines()[0]
         if importance is not None and (type(importance) is not int or not 1 <= importance <= 5):
             raise ValueError("importance debe estar entre 1 y 5")
+        if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
+            raise ValueError("expected_revision debe ser un entero positivo")
         with self._lock, self._db:
             current = self.get(uid)
             if current is None:
                 return None
+            if expected_revision is not None and current["revision"] != expected_revision:
+                raise MemoryConflictError("Revision distinta; recupera de nuevo el recuerdo")
             tags_json = json.dumps(_tags(tags) if tags is not None else current["tags"], ensure_ascii=False)
             fingerprint = self._fingerprint(current["kind"], title, body)
             try:
                 self._db.execute("""
                     UPDATE memories SET body=?, title=?, tags_json=?, importance=?,
-                        updated_ms=?, fingerprint=?
-                    WHERE uid=? AND space=? AND project=?
+                        updated_ms=?, fingerprint=?, revision=revision+1
+                    WHERE uid=? AND space=? AND project=? AND revision=?
                 """, (
                     body, title, tags_json,
                     current["importance"] if importance is None else importance,
-                    _now_ms(), fingerprint, uid, self.space, self.project,
+                    max(_now_ms(), current["updated_ms"] + 1), fingerprint, uid, self.space, self.project,
+                    current["revision"],
                 ))
+                if self._db.execute("SELECT changes()").fetchone()[0] != 1:
+                    raise MemoryConflictError("Cambio concurrente; reintenta tras recuperar")
             except sqlite3.IntegrityError as error:
                 raise ValueError("Ya existe una memoria identica en este espacio") from error
+            self._audit(uid, "update", current["revision"] + 1)
             return self.get(uid)
 
     def list_recent(self, *, limit: int = 20, kind: str | None = None) -> list[dict[str, Any]]:
