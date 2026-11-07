@@ -98,6 +98,21 @@ Criterio: restaurar decisiones actuales e historicas sin mezclar estados.
 - Politicas para compartir selectivamente memorias entre dos clientes.
 Criterio: continuidad real entre dos aplicaciones y cero acceso no autorizado.
 
+## Version futura (posterior a v0.5): jerarquia de proyectos
+
+**Pospuesto por decision del propietario**. Proyectos principales protegidos:
+SynapSyS, SynapSyS-MemorY, SYPcoin y SynapSyS-Lab. No mezclar estas
+raices. Un futuro sistema de relaciones padre-hijo permitira, si el
+usuario concede permiso explicito, operar con varios proyectos
+secundarios de la MISMA raiz dentro de una sesion, con permisos
+especificos, temporales y revocables.
+
+No existe herencia automatica: los hijos no obtienen permisos sobre
+su padre ni sus hermanos. No se implementara sin broker autenticado
+y sandbox de archivos verificable. V0.2 mantiene un proyecto por sesion.
+
+Especificacion: [FUTURE_PARENT_CHILD_PROJECT_GRANTS.md](FUTURE_PARENT_CHILD_PROJECT_GRANTS.md).
+
 ## Calidad y rendimiento
 
 Pruebas con 1k, 10k y 100k recuerdos, incluyendo coincidencia literal,
