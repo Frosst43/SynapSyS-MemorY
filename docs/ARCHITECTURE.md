@@ -1,5 +1,13 @@
 # Arquitectura y contratos de SynapSyS-MemorY (v0.1)
 
+## Contrato de producto: MEMORIA SIN IA
+
+SynapSyS-MemorY no lleva LLM, Ollama, embeddings, clasificadores
+entrenados, generacion de resumenes, inferencia ni modelos de ningun
+tipo. Esto es una restriccion deliberada del producto, no una limitacion
+temporal. Las IAs externas consumen las herramientas de memoria;
+el motor no incluye inteligencia artificial.
+
 ## Limites del componente
 
 El nucleo no sabe que es OpenCode, OpenClaw, SynapSyS, un modelo ni un proveedor.
@@ -23,13 +31,13 @@ procedencia, importancia (1..5), timestamps, expiracion opcional.
 1. Se separan terminos de la consulta y se escapan antes de pasar a FTS5;
    no se concatena SQL a partir del texto de la consulta.
 2. BM25 reduce candidatos dentro de un mismo espacio y proyecto.
-3. Relevancia lexica es el factor dominante; actualidad e importancia ajustan.
+3. Relevancia lexica domina; actualidad e importancia ajustan mediante formulas.
 4. Se limita cantidad de memorias, caracteres devueltos y texto por memoria.
 5. Se retorna `source`, timestamps y `truncated`, nunca autoridad de sistema.
 
-**Limitacion**: v0.1 carece de ranking semantico y evaluacion de calidad por
-corpus real. No se presupone que este ranking sea optimo ni que resuelva
-contradicciones entre recuerdos.
+**Limitacion:** FTS5 no deduce el significado de sinonimos o parafrasis.
+Las mejoras permitidas son normalizacion, listas explicitas de sinonimos,
+filtros, busqueda aproximada y otras tecnicas deterministas, SIN IA.
 
 ## Seguridad y privacidad
 
@@ -49,15 +57,15 @@ contradicciones entre recuerdos.
 ## Criterios para v0.2
 
 - Probar MCP end-to-end contra OpenCode y OpenClaw y documentar versiones.
-- Definir una politica de extraccion con consentimiento, minimizacion y
-  eliminacion de secretos previa al almacenamiento.
-- Añadir evaluaciones reproducibles con conjuntos de preguntas/respuestas
-  para relevancia, precision, recuperacion indebida y contradicciones.
+- Registrar origen y consentimiento de cada escritura; impedir secretos
+  en la entrada mediante politicas explicitas y validacion de los clientes.
+- Evaluar relevancia, precision, recuperacion indebida y versiones historicas.
 - Medir p50/p95/p99 y RAM con al menos 10k y 100k recuerdos en hardware
-  representativo. Ninguna promesa de milisegundos sin datos de esa maquina.
+  representativo. Ninguna promesa sin medir en esa maquina.
 - Diseñar adaptadores con permisos y conexiones explicitamente configurados.
 
 ## Decisiones deliberadas
 
-No hay vector database, cron, servidor web ni proceso residente obligatorio en
-el MVP. Se añadiran solo cuando se demuestre una necesidad real.
+No hay modelos, base vectorial, cron, servidor web ni proceso residente
+obligatorio. Los componentes futuros deben seguir siendo deterministas,
+modulares y eficientes. Ver hoja de ruta SIN IA.
