@@ -1,142 +1,125 @@
-# Investigacion y hoja de ruta de memoria inteligente
+# Hoja de ruta de SynapSyS-MemorY: memoria SIN IA
 
 Fecha: 2026-11-07
-Estado: plan tecnico; NO es funcionalidad ya implementada.
-Base: v0.1.0, SQLite/FTS5 y MCP stdio opcional.
+Decision del propietario: **no implementar inteligencia artificial dentro de SynapSyS-MemorY**.
+Estado: plan de desarrollo; las funciones futuras no estan implementadas.
 
-## Objetivo
+## Principio obligatorio
 
-Construir un motor de memoria independiente de cualquier LLM o aplicacion, ligero,
-local primero, persistente, con procedencia, continuidad interaplicaciones,
-permisos explicitos y respuesta limitada a evidencias pertinentes.
+SynapSyS-MemorY es un **servicio de memoria**, no un agente ni un modelo.
+Las IAs de terceros se conectan a este servicio; nunca forman parte del motor.
 
-La ventaja competitiva no debe ser duplicar la memoria propia de OpenClaw
-(ya tiene busqueda hibrida y captura), sino ofrecer una memoria coherente
-entre aplicaciones sin mezclar informacion privada ni perder decisiones.
+Excluido del motor y de sus modulos:
+- LLM, modelos locales o remotos, Ollama, clasificadores entrenados y agentes.
+- Embeddings, modelos vectoriales, rerankers neuronales e inferencia.
+- Extraccion automatica de hechos mediante IA, resúmenes generativos
+  o reconciliacion semantica automatica.
+- GPU obligatoria, nube obligatoria o entrenamientos.
 
-## Hallazgos
+La aplicacion conectada puede decidir por su cuenta que recuerdos
+escribir, actualizar, leer o borrar; SynapSyS-MemorY **no toma esas
+decisiones usando IA**. Registra operaciones y metadatos explicitamente
+entregados por el cliente, sujetos a permisos.
 
-- OpenCode: servidores MCP locales/remotos. Su V2 usa mcp.servers;
-  versiones anteriores definen servidores directamente bajo mcp.
-  Los plugins tienen eventos de mensajes y sesiones.
-- OpenClaw: soporta MCP externo, plugins/hook de sesion y una memoria
-  propia SQLite/FTS5/vectorial. No sustituirla sin una prueba comparativa.
-- Mem0: extraccion selectiva y consolidacion de hechos en lugar de
-  reenviar la totalidad del historial al agente.
-- Graphiti: aristas y entidades con vigencia temporal y evidencias.
-- LongMemEval: evaluar extraccion, razonamiento entre sesiones,
-  temporalidad, actualizaciones y abstencion.
-- sqlite-vec: motor KNN local opcional, todavia pre-v1.
-- Ollama: endpoint /api/embed, compatible con entradas por lotes.
-- Modelos candidatos: qwen3-embedding:0.6b (~639 MB paquete Ollama)
-  y EmbeddingGemma (~308 millones de parametros).
-- RRF: fusion de rankings BM25/vector sin equiparar escalas.
+## Arquitectura
 
-Referencias:
+OpenCode / OpenClaw / SynapSyS / otras aplicaciones
+  -> conectores MCP, SDK o API local futura
+  -> validacion + autenticacion/autorizacion por conector
+  -> servicio de memoria (determinista)
+  -> SQLite WAL + FTS5/BM25 + indices + historial versionado.
+
+Los conectores no pueden cambiar unilateralmente el espacio al que
+tienen acceso. El acceso a SQLite directamente evade los permisos
+logicos, por lo que los clientes no confiables requeriran un broker
+autenticado o archivos/bases separados con controles del sistema operativo.
+
+## Funciones del motor
+
+1. Guardar, recuperar, corregir, borrar y exportar recuerdos.
+2. Separar informacion por propietario, aplicacion, proyecto y espacio.
+3. Adjuntar fuente, fecha, tags, categoria, prioridad, vigencia y TTL.
+4. Dedupe exacta determinista con hashes e idempotencia de eventos.
+5. Busqueda por texto completo FTS5/BM25 y filtros de metadatos.
+6. Soporte optativo de sinonimos escritos por el usuario, normalizacion
+   linguistica, prefijos y coincidencia aproximada **algoritmica**
+   cuando mejore las medidas; sin embeddings ni modelos.
+7. Historial de revisiones: version actual, anterior, sustitucion o
+   controversia **declaradas**; no adivinar contradicciones en lenguaje.
+8. Retencion configurable, respaldo consistente, importacion y auditoria.
+9. Limitacion de resultados, presupuesto de caracteres, paginacion y
+   salidas estructuradas para evitar inflar el contexto de la IA cliente.
+10. Aislamiento fuerte, permisos por herramienta, pruebas de seguridad.
+
+## Memoria de corto, medio y largo plazo
+
+- Corta: contenido con caducidad; el cliente fija el TTL.
+- Media: hitos/estado de sesion almacenados con categoria apropiada.
+- Larga: decisiones y hechos duraderos aprobados por el cliente.
+- Sin promocion automatica por inferencia, resúmenes de IA o evaluacion
+  subjetiva del contenido. Las politicas de vencimiento son reglas claras.
+
+Ejemplo temporal:
+- Un cliente guarda un parametro aprobado: 4 minutos.
+- Otro cliente propone 5 minutos: registra estado "propuesta".
+- Se confirma 4 minutos: se registra "vigente", conservando el historial.
+El motor devuelve el estado registrado, no decide cual es correcto.
+
+## Fases
+
+### v0.2: robustez y conexiones reales
+- Migraciones versionadas, respaldos/restauracion y validacion de integridad.
+- Handshake MCP end-to-end, y pruebas con OpenCode y OpenClaw instalados.
+- Endurecer permisos de lectura/escritura/borrado; limites de tamaño.
+- Test unitarios de concurrencia, FTS, aislamiento y fallos.
+Criterio: las herramientas conectan y devuelven datos reales sin violar permisos.
+
+### v0.3: recuperacion determinista mejorada
+- BM25 ajustado con datos de calidad medidos.
+- Filtros por fecha, fuente, etiquetas, categoria, proyecto y vigencia.
+- Busqueda exacta por identificadores, rutas, hashes y frases.
+- Sinonimos configurados, prefijos y coincidencia aproximada si los
+  benchmarks muestran que ayudan; todo sin IA.
+- Consulta estructurada con paginacion y presupuesto de resultados.
+Criterio: mejor precision y recall sobre FTS5 base sin latencias excesivas.
+
+### v0.4: historial, relaciones y continuidad
+- Esquema de revisiones, vigencia y estado de decision explícitos.
+- Relaciones entre memorias definidas por el cliente.
+- Politicas de corto/medio/largo plazo basadas en reglas y TTL.
+- Importacion/exportacion controlada con trazabilidad.
+Criterio: restaurar decisiones actuales e historicas sin mezclar estados.
+
+### v0.5: conectores y administracion
+- Plugin opcional OpenCode y adaptador OpenClaw.
+- Clientes realizan llamadas de almacenamiento/lectura segun su
+  configuracion y permisos. El servidor nunca usa IA para capturar.
+- SDK Python, API local autenticada solo si hace falta.
+- Politicas para compartir selectivamente memorias entre dos clientes.
+Criterio: continuidad real entre dos aplicaciones y cero acceso no autorizado.
+
+## Calidad y rendimiento
+
+Pruebas con 1k, 10k y 100k recuerdos, incluyendo coincidencia literal,
+errores tipograficos, sinonimos declarados, espacios cruzados, datos
+caducados y versiones contradictorias explicitamente registradas.
+
+Medir recall, precision, p50/p95/p99, RAM, CPU, tamaño de base,
+duracion de indices y errores de autorizacion.
+
+Objetivo no garantizado: p95 inferior a 50 ms en consultas FTS calientes
+con 10k recuerdos en la maquina de destino; benchmark reproducible
+antes de declarar resultados.
+
+## Referencias utiles (solo interoperabilidad e indexacion)
+
 - https://opencode.ai/v2/docs/mcp-servers
 - https://docs.opencode.ai/docs/plugins/
 - https://docs.openclaw.ai/tools/mcp
 - https://docs.openclaw.ai/plugins/hooks
 - https://docs.openclaw.ai/concepts/memory
-- https://arxiv.org/abs/2504.19413
-- https://www.getzep.com/platform/graphiti/
-- https://proceedings.iclr.cc/paper_files/paper/2025/hash/d813d324dbf0598bbdc9c8e79740ed01-Abstract-Conference.html
-- https://github.com/asg017/sqlite-vec
-- https://github.com/ollama/ollama/blob/main/docs/capabilities/embeddings.mdx
-- https://ollama.com/library/qwen3-embedding
-- https://developers.googleblog.com/introducing-embeddinggemma/
-- https://docs.opensearch.org/latest/vector-search/ai-search/hybrid-search/rrf/
+- https://www.sqlite.org/fts5.html
+- https://www.sqlite.org/wal.html
 
-## Arquitectura propuesta
-
-Conector -> captura consentida -> extraccion selectiva -> validacion ->
-almacen versionado -> indice lexical y vectorial -> ranking hibrido ->
-filtro de permisos -> devolucion limitada con evidencias.
-
-Capturar: eventos idempotentes por aplicacion/sesion/evento, con fuente y
-marca temporal. Almacenar hechos, decisiones, preferencias y episodios de
-forma deliberada, nunca volcar automaticamente un historial entero.
-Rechazar claves, tokens y datos sin permiso; tratar cualquier texto como
-contenido NO confiable, no como orden del sistema.
-
-Guardar: SQLite WAL y FTS5 siguen siendo obligatorios. Tabla de
-revisiones append-only para la trazabilidad; estados activo, propuesta,
-sustituido, disputado, retirado. Relaciones temporales simples, sin base
-de grafos externa como requisito. Version del modelo embeddings y hash
-de contenido para reconstruir indices. Cola de indexacion acotada para
-mantener el camino interactivo rapido.
-
-Buscar: filtro de espacio/proyecto y permisos ANTES de devolver resultados;
-BM25 para identificadores/errores y similitud vectorial para parafrasis;
-fusion por RRF; diversidad, actualidad, vigencia y evidencia; presupuesto
-de caracteres/tokens. Si el modelo de embeddings no esta disponible, FTS5
-continua funcionando.
-
-Corto plazo: contexto temporal con TTL.
-Medio plazo: resumenes de sesiones, tareas y hitos activos.
-Largo plazo: decisiones aprobadas, hechos duraderos y preferencias.
-Promocion solo por relevancia/confianza, no por cantidad de lecturas.
-
-Ejemplo de contradiccion:
-- Fecha A: objetivo de bloque de 4 minutos (aprobado).
-- Fecha B: propuesta de 5 minutos (no aprobada).
-- Fecha C: ratificacion de 4 minutos.
-El agente debe recibir 4 minutos como estado vigente, con referencia a C.
-La propuesta B y el hecho historico A conservan su situacion temporal.
-
-## Fases
-
-### v0.2: blindar el nucleo, integracion MCP real
-- Migraciones SQLite versionadas y copia de seguridad verificada.
-- Pruebas focalizadas de FTS, concurrencia, error, borrado y escapes.
-- Handshake de MCP stdio real con el SDK, y pruebas con versiones
-  instaladas de OpenCode y OpenClaw.
-- Separacion de permisos de escritura/borrado y lectura por conexion.
-Gate: ninguna regresion; MCP realmente conectado, no solo tests unitarios.
-
-### v0.3: busqueda semantica hibrida
-- Interfaz de embeddings con proveedor local opcional.
-- Comparar Qwen3 0.6B vs EmbeddingGemma sobre corpus espanol/ingles.
-- Cache por version de modelo, indexacion por lotes, fallback FTS.
-- sqlite-vec como plugin no obligatorio, fusion BM25+vector con RRF.
-- Evaluar errores exactos (ids/rutas/hashes) y parafrasis.
-Gate: mejora medible en Recall@5/nDCG@10 sin perder exact-match.
-
-### v0.4: memoria temporal e inteligente
-- Extractor de hechos con reglas y modelo local opcional.
-- Propuestas ADD/UPDATE/SUPERSEDE/IGNORE y reconciliacion por fuente.
-- Dedupe semantico como sugerencia, nunca fusion silenciosa.
-- Revision historica, relaciones simples y resumentes por sesion.
-- Confirmacion de decisiones delicadas o contradictorias.
-Gate: pruebas de cambios, contradicciones, vigencia y abstencion.
-
-### v0.5: conectores automáticos
-- OpenCode: plugin optativo en evento de sesion idle/cierre.
-- OpenClaw: plugin/hook con permiso de lectura de conversacion.
-- Interfaz MCP y SDK Python para otros programas.
-- API local autenticada solo si una aplicacion no admite MCP.
-- Prueba de continuidad con dos clientes y aislamiento por defecto.
-Gate: lectura/escritura controlada entre dos clientes reales, sin fugas.
-
-## Rendimiento y calidad
-
-Cargas: 1k, 10k y 100k memorias sinteticas; dataset de preguntas
-con evidencias, sinonimos, proyectos cruzados, cambios y desconocidos.
-Medir Recall@5, nDCG@10, exactitud final, abstencion correcta, fugas
-de espacio, p50/p95/p99 en frio/caliente, RAM, CPU, reindexacion y
-consumo de tokens; desglosar latencia embedding/FTS/MCP.
-
-Metas a validar en la maquina de destino, NO promesas:
-- Sin degradacion frente a v0.1 en ruta FTS5.
-- FTS caliente: p95 objetivo inferior a 50 ms a 10k memorias.
-- Hibrido caliente: p95 objetivo inferior a 500 ms a 10k memorias;
-  si no alcanza, conservar una via FTS rapida.
-- Cero accesos cruzados sin autorizacion en pruebas de seguridad.
-
-## Restricciones
-
-Sin LLM permanente ni GPU obligatoria. Sin sincronizacion remota por
-defecto. Sin reemplazo de la memoria de terceros antes de comprobar
-compatibilidad. El conector del agente no decide por si mismo sus
-propios permisos. El usuario puede revisar, corregir, exportar y
-eliminar recuerdos; backups obedecen retencion independiente.
+**Regla de producto:** las decisiones de introducir IA, embeddings o
+modelos en SynapSyS-MemorY no pertenecen a la hoja de ruta vigente.
