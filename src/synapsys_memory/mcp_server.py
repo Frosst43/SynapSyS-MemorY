@@ -8,6 +8,7 @@ no es una frontera de autenticacion multiusuario.
 import os
 
 from .policy import ConnectorPolicy
+from .broker import BrokerClient
 from .store import MemoryStore
 
 
@@ -93,6 +94,20 @@ def make_server(store: MemoryStore, policy: ConnectorPolicy | None = None):
 
 
 def main() -> None:
+    # A session must use the trusted broker when configured. The broker derives
+    # rights and project from the token; MCP clients cannot escalate via env.
+    broker_socket = os.environ.get("SYMEM_BROKER_SOCKET", "")
+    if broker_socket:
+        token = os.environ.get("SYMEM_SESSION_TOKEN", "")
+        with BrokerClient(broker_socket, token) as store:
+            profile = store.profile()
+            policy = ConnectorPolicy.from_values(profile["client"], ",".join(profile["rights"]))
+            make_server(store, policy).run(transport="stdio")
+        return
+    # Default fail closed: direct SQLite explicitly disabled in new profiles.
+    if os.environ.get("SYMEM_ALLOW_LEGACY_DIRECT") != "1":
+        raise RuntimeError("MCP exige SYMEM_BROKER_SOCKET y SYMEM_SESSION_TOKEN; modo SQLite directo desactivado")
+    # Modo heredado opt-in, SOLO agentes locales de confianza.
     policy = ConnectorPolicy.from_environment()
     with MemoryStore(
         os.environ.get("SYMEM_DB"),

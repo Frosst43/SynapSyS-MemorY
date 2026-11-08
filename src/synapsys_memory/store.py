@@ -125,18 +125,21 @@ class MemoryStore:
         self._db.row_factory = sqlite3.Row
         if os.name == "posix":
             os.chmod(self.path, 0o600)
-        with self._lock:
-            version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
-            if version > SCHEMA_VERSION:
-                self._db.close()
-                raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
-            self._db.execute("PRAGMA busy_timeout=5000")
-            self._db.execute("PRAGMA journal_mode=WAL")
-            self._db.execute("PRAGMA synchronous=NORMAL")
-            self._db.execute("PRAGMA secure_delete=ON")
-            self._db.execute("PRAGMA foreign_keys=ON")
-            self._create_schema()
-            self._migrate()
+        try:
+            with self._lock:
+                version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
+                if version > SCHEMA_VERSION:
+                    raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
+                self._db.execute("PRAGMA busy_timeout=5000")
+                self._db.execute("PRAGMA journal_mode=WAL")
+                self._db.execute("PRAGMA synchronous=NORMAL")
+                self._db.execute("PRAGMA secure_delete=ON")
+                self._db.execute("PRAGMA foreign_keys=ON")
+                self._create_schema()
+                self._migrate()
+        except BaseException:
+            self._db.close()  # No filtrar descriptores si falla el inicio o migracion.
+            raise
 
     def _create_schema(self) -> None:
         with self._db:
