@@ -15,6 +15,8 @@ from pathlib import Path
 import secrets
 import socket
 import socketserver
+import stat
+import struct
 import threading
 import time
 from typing import Any
@@ -69,6 +71,21 @@ def request(socket_path: str | Path, data: dict[str, Any], *, timeout: float = 3
             raise ValueError(message)
         raise BrokerError(message)
     return response["result"]
+
+
+def _peer_uid(connection: socket.socket) -> int:
+    """UID real del cliente obtenido del kernel Unix, nunca del mensaje JSON."""
+    if hasattr(socket, "SO_PEERCRED"):
+        raw = connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                    struct.calcsize("3i"))
+        _pid, uid, _gid = struct.unpack("3i", raw)
+        if uid < 0:
+            raise PermissionError("Identidad de proceso no valida")
+        return uid
+    if hasattr(connection, "getpeereid"):
+        uid, _gid = connection.getpeereid()
+        return uid
+    raise PermissionError("SO_PEERCRED/getpeereid no disponible; no se admite acceso")
 
 
 class BrokerClient:
@@ -149,10 +166,14 @@ class _Handler(socketserver.StreamRequestHandler):
             message = json.loads(raw)
             if not isinstance(message, dict):
                 raise ValueError("La solicitud debe ser un objeto")
+            peer_uid = _peer_uid(self.connection)
             if self.server.admin:
+                # La clave no sustituye la identidad OS del administrador.
+                if peer_uid != os.geteuid():
+                    raise PermissionError("Administrador del broker no autorizado")
                 value = self.server.broker._admin(message)
             else:
-                value = self.server.broker._client(message)
+                value = self.server.broker._client(message, peer_uid=peer_uid)
             response = {"ok": True, "result": value}
         except PermissionError:
             response = {"ok": False, "error": "permission", "message": "Acceso denegado"}
@@ -180,7 +201,7 @@ class BrokerDaemon:
     """
 
     def __init__(self, db: str | Path, client_socket: str | Path, admin_socket: str | Path,
-                 *, admin_key: str):
+                 *, admin_key: str, client_gid: int | None = None):
         if not isinstance(admin_key, str) or len(admin_key) < 48:
             raise ValueError("Clave admin de 48 caracteres minimo obligatoria")
         self.db = Path(db).expanduser()
@@ -190,6 +211,9 @@ class BrokerDaemon:
             raise ValueError("Sockets de datos y administracion distintos")
         if self.db.resolve() in (self.client_socket.resolve(), self.admin_socket.resolve()):
             raise ValueError("Base de datos y sockets deben ser diferentes")
+        if client_gid is not None and (type(client_gid) is not int or client_gid < 0):
+            raise ValueError("client_gid debe ser un GID valido")
+        self.client_gid = client_gid
         self._admin_hash = hashlib.sha256(admin_key.encode()).digest()
         self._lock = threading.RLock()
         self._sessions: dict[str, dict] = {}
@@ -204,11 +228,39 @@ class BrokerDaemon:
         for p in paths:
             if p.exists() or p.is_symlink():
                 raise FileExistsError(f"El socket ya existe: {p}")
+            if p.parent.is_symlink():
+                raise ValueError("Directorio de socket no puede ser enlace simbolico")
             p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if p.parent.stat().st_uid != os.geteuid():
+                raise PermissionError("Directorio de socket no pertenece al broker")
+            if stat.S_IMODE(p.parent.stat().st_mode) & 0o027:
+                raise PermissionError("Directorio socket no puede ser escribible por grupo ni accesible por otros")
+        # No abrir SQLite si la ruta permite suplantar o leer la base.
+        if self.db.is_symlink() or self.db.parent.is_symlink():
+            raise PermissionError("No se permiten enlaces simbolicos para SQLite")
+        self.db.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        db_dir = self.db.parent.stat()
+        if db_dir.st_uid != os.geteuid() or stat.S_IMODE(db_dir.st_mode) & 0o027:
+            raise PermissionError("Directorio SQLite no protegido frente a otros usuarios")
+        if self.db.exists():
+            file_stat = self.db.stat()
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+                raise PermissionError("SQLite debe ser un archivo regular sin enlaces multiples")
+            if file_stat.st_uid != os.geteuid() or stat.S_IMODE(file_stat.st_mode) & 0o077:
+                raise PermissionError("Archivo SQLite no protegido; permisos requeridos 0600")
+        if self.client_gid is not None:
+            # Los directorios se preparan fuera del programa. No cambiar
+            # permisos de carpetas arbitrarias del usuario.
+            if not (stat.S_IMODE(self.client_socket.parent.stat().st_mode) & stat.S_IXGRP):
+                raise PermissionError("Directorio cliente necesita permiso de paso para grupo")
         try:
             for path, is_admin in ((self.client_socket, False), (self.admin_socket, True)):
                 server = _Server(str(path), _Handler, self, is_admin)
-                os.chmod(path, 0o600)
+                if not is_admin and self.client_gid is not None:
+                    os.chown(path, -1, self.client_gid)
+                    os.chmod(path, 0o660)
+                else:
+                    os.chmod(path, 0o600)
                 self._servers.append(server)
             for server in self._servers:
                 th = threading.Thread(target=server.serve_forever, name="symem-broker", daemon=True)
@@ -244,23 +296,28 @@ class BrokerDaemon:
         self.stop()
 
     def _issue(self, session: str, client: str, space: str, project: str,
-               rights: str, ttl_seconds: int) -> dict:
+               rights: str, ttl_seconds: int, peer_uid: int | None = None) -> dict:
         policy = ConnectorPolicy.from_values(client, rights)
         session = _scope(session, "session")
         space = _scope(space, "space")
         project = _scope(project, "project")
         if type(ttl_seconds) is not int or not 30 <= ttl_seconds <= 86400:
             raise ValueError("ttl_seconds debe estar entre 30 y 86400")
+        if peer_uid is None:
+            peer_uid = os.geteuid()
+        if type(peer_uid) is not int or not 0 <= peer_uid <= 2**32 - 1:
+            raise ValueError("peer_uid debe ser UID valido del proceso cliente")
         token = secrets.token_urlsafe(40)
         expires_at = time.time() + ttl_seconds
         self._sessions[session] = {
             "token_hash": hashlib.sha256(token.encode()).digest(),
             "client": policy.client, "rights": policy.rights, "space": space,
             "project": project, "expires_at": expires_at,
+            "peer_uid": peer_uid,
         }
         return {"session": session, "token": token, "client": client,
                 "space": space, "project": project, "rights": sorted(policy.rights),
-                "expires_at": int(expires_at)}
+                "expires_at": int(expires_at), "peer_uid": peer_uid}
 
     def _admin(self, msg: dict) -> dict:
         auth = msg.get("admin_key")
@@ -277,7 +334,8 @@ class BrokerDaemon:
                 if session in self._sessions:
                     raise ValueError("La sesion ya tiene proyecto; use switch")
                 return self._issue(session, args["client"], args["space"], args["project"],
-                                   args["rights"], args.get("ttl_seconds", 1800))
+                                   args["rights"], args.get("ttl_seconds", 1800),
+                                   args.get("peer_uid"))
             if action == "switch":
                 session = _scope(args["session"], "session")
                 if session not in self._sessions:
@@ -285,24 +343,28 @@ class BrokerDaemon:
                 # Validate all new inputs BEFORE revoking the old session.
                 client, space, project = args["client"], args["space"], args["project"]
                 rights, ttl = args["rights"], args.get("ttl_seconds", 1800)
+                peer_uid = args.get("peer_uid")
+                if peer_uid is not None and (type(peer_uid) is not int
+                                             or not 0 <= peer_uid <= 2**32 - 1):
+                    raise ValueError("peer_uid invalido")
                 ConnectorPolicy.from_values(client, rights)
                 _scope(space, "space"); _scope(project, "project")
                 if type(ttl) is not int or not 30 <= ttl <= 86400:
                     raise ValueError("ttl_seconds invalido")
                 # All data operations use this same lock. No old-token operation
                 # can begin after this switch returns.
-                return self._issue(session, client, space, project, rights, ttl)
+                return self._issue(session, client, space, project, rights, ttl, peer_uid)
             if action == "revoke":
                 session = _scope(args["session"], "session")
                 return {"revoked": self._sessions.pop(session, None) is not None}
             if action == "sessions":
                 return [{"session": s, "client": g["client"], "space": g["space"],
                          "project": g["project"], "rights": sorted(g["rights"]),
-                         "expires_at": int(g["expires_at"])}
+                         "peer_uid": g["peer_uid"], "expires_at": int(g["expires_at"])}
                         for s, g in self._sessions.items() if time.time() < g["expires_at"]]
             raise ValueError("Accion admin desconocida")
 
-    def _client(self, msg: dict) -> Any:
+    def _client(self, msg: dict, *, peer_uid: int) -> Any:
         token = msg.get("token")
         action = msg.get("action")
         args = msg.get("args", {})
@@ -315,6 +377,8 @@ class BrokerDaemon:
                           and time.time() < g["expires_at"]), None)
             if grant is None:
                 raise PermissionError("Sesion revocada, desconocida o caducada")
+            if peer_uid != grant["peer_uid"]:
+                raise PermissionError("El UID del proceso no coincide con la sesion")
             if action == "profile":
                 return {k: (sorted(v) if isinstance(v, frozenset) else v)
                         for k, v in grant.items() if k in ("client", "space", "project", "rights", "expires_at")}
@@ -323,7 +387,7 @@ class BrokerDaemon:
             if RIGHTS_BY_ACTION[action] not in grant["rights"]:
                 raise PermissionError("Permiso no concedido")
             # No project/space/client/rights can be supplied by the agent.
-            if any(k in args for k in ("project", "space", "client", "rights", "source", "actor")):
+            if any(k in args for k in ("project", "space", "client", "rights", "source", "actor", "peer_uid")):
                 raise PermissionError("No se permite elegir contexto")
             key = (grant["space"], grant["project"], grant["client"])
             store = self._stores.get(key)

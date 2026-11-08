@@ -120,6 +120,19 @@ class MemoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if os.name == "posix" and self.path.parent.name == "synapsys-memory":
             os.chmod(self.path.parent, 0o700)
+        # Reservar atomicamente el archivo SQLite con modo 0600 ANTES de
+        # abrirlo. sqlite3.connect por si solo respeta un umask potencialmente
+        # permisivo, lo que crearia una ventana de exposicion.
+        if self.path.is_symlink():
+            raise ValueError("No se admite SQLite a traves de enlaces simbolicos")
+        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(self.path, flags, 0o600)
+        except FileExistsError:
+            if self.path.is_symlink():
+                raise ValueError("SQLite no puede ser enlace simbolico")
+        else:
+            os.close(fd)
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
         self._db.row_factory = sqlite3.Row

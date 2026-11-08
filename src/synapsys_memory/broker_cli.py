@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="Servidor local propietario de SQLite")
     serve.add_argument("--db", type=Path, default=_BASE / "memory.sqlite3")
+    serve.add_argument("--client-gid", type=int, default=None, help="GID autorizado para socket de datos")
     for cmd in ("grant", "switch", "revoke", "sessions"):
         subp = sub.add_parser(cmd)
         if cmd in ("grant", "switch", "revoke"):
@@ -30,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
             subp.add_argument("--project", required=True)
             subp.add_argument("--rights", default="read")
             subp.add_argument("--ttl-seconds", type=int, default=1800)
+            subp.add_argument("--peer-uid", type=int, default=None, help="UID Linux del ejecutor autorizado")
     args = parser.parse_args(argv)
     key = os.environ.get("SYMEM_ADMIN_KEY")
     if not key or len(key) < 48:
@@ -41,12 +43,13 @@ def main(argv: list[str] | None = None) -> int:
                 stopping.set()
             signal.signal(signal.SIGINT, end)
             signal.signal(signal.SIGTERM, end)
-            with BrokerDaemon(args.db, args.socket, args.admin_socket, admin_key=key):
+            with BrokerDaemon(args.db, args.socket, args.admin_socket,
+                              admin_key=key, client_gid=args.client_gid):
                 print("Broker local activo (no exponer sockets ni clave a agentes no confiables)", file=sys.stderr)
                 stopping.wait()
             return 0
         opts = {}
-        for key_name in ("session", "client", "space", "project", "rights", "ttl_seconds"):
+        for key_name in ("session", "client", "space", "project", "rights", "ttl_seconds", "peer_uid"):
             if hasattr(args, key_name):
                 opts[key_name] = getattr(args, key_name)
         result = admin_request(args.admin_socket, key, args.command, **opts)

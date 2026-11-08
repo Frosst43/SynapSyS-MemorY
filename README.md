@@ -7,7 +7,7 @@ El motor es determinista: guarda y busca datos que sus aplicaciones cliente entr
 
 ## Estado
 
-- **v0.2.0.dev1 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
+- **v0.2.0.dev3 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
 - **SQLite + FTS5/BM25**: búsqueda local y almacenamiento persistente.
 - **MCP stdio**: adaptador opcional; el protocolo y los tres clientes reales siguen pendientes de verificación en la máquina de destino.
 - **Política por proceso MCP**: herramientas de lectura, escritura y borrado separadas.
@@ -48,19 +48,13 @@ Ruta por defecto: `~/.local/share/synapsys-memory/memory.sqlite3`. Se puede modi
 
 Para modificar desde la CLI se puede utilizar `--expected-revision N` tras `update` o `forget`. Los clientes MCP deben enviar obligatoriamente una revisión esperada para esas operaciones.
 
-## Conectar dos aplicaciones al mismo proyecto
+## Conectar dos aplicaciones al mismo proyecto (en preparacion)
 
-Configuración MCP en cada cliente:
+El adaptador MCP actual exige `SYMEM_BROKER_SOCKET` y `SYMEM_SESSION_TOKEN` emitido por un administrador confiable. No basta configurar `SYMEM_DB`, `SYMEM_SPACE` y `SYMEM_PROJECT`: el acceso SQLite directo queda **desactivado por defecto**.
 
-```text
-SYMEM_DB=/RUTA/PRIVADA/memory.sqlite3
-SYMEM_SPACE=compartido
-SYMEM_PROJECT=demo
-SYMEM_CLIENT=opencode
-SYMEM_RIGHTS=read,write
-```
+Los permisos y el proyecto se asignan mediante concesiones del broker, no desde la IA. No guardar tokens reales en repositorios, archivos de configuración compartidos ni prompts. Los clientes con el mismo UID de Linux **no** quedan aislados mediante este mecanismo por sí solo.
 
-Codex puede utilizar el mismo DB/SPACE/PROJECT con `SYMEM_CLIENT=codex` y `SYMEM_RIGHTS=read` para acceder solo en lectura. El proceso MCP permite de forma predeterminada `read,write`, **sin delete**. Los derechos válidos son `read`, `write` y `delete` (este último exige `write`).
+Las configuraciones de cliente deben utilizar un lanzador confiable con sandbox. La integración con clientes reales está pendiente.
 
 Referencias: [OpenCode](examples/opencode-v1.json), [Codex](examples/codex.toml), [OpenClaw](examples/openclaw.md). Las rutas deben adaptarse a la instalación. La incorporación a los clientes no está ejecutada.
 
@@ -90,3 +84,9 @@ La prueba verifica que un cliente escribe, otro de solo lectura recupera el dato
 - Pruebas de concurrencia más exigentes y evaluación de rendimiento en hardware de destino.
 
 [Arquitectura multicliente](docs/MULTI_CLIENT_ARCHITECTURE.md) · [Hoja de ruta sin IA](docs/ROADMAP_MEMORY_INTELLIGENCE.md) · [Alcance de v0.2](docs/V02_SECURITY_AND_TESTS.md)
+
+## Endurecimiento experimental (dev3)
+
+El broker vincula cada token al UID real del proceso cliente (identidad del kernel Unix), comprueba permisos de archivos y sockets antes de arrancar y crea SQLite con permisos 0600 desde el inicio. Para despliegue con diferentes cuentas Linux existen `--peer-uid` (grant/switch) y `--client-gid` (serve). Esto **no sustituye** un sandbox de archivos por proyecto ni autoriza a un agente a decidir sus propios permisos.
+
+Ver [guía de aislamiento OS](docs/V02_OS_ISOLATION.md).
