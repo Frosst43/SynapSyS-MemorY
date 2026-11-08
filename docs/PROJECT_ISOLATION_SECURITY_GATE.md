@@ -6,6 +6,20 @@ Motor: SIN IA.
 
 ## Regla de oro
 
+**APLICACION UNIVERSAL:** esta politica debe funcionar para CUALQUIER
+programa o repositorio, actual o futuro. Los nombres `SYPminer`,
+`Terminal PRO`, `SynapSyS` y `SYPcoin` son ejemplos, NUNCA
+identificadores especiales del motor ni casos codificados a mano.
+
+Cada proyecto registrado se identifica por su ID, no por el nombre
+de la IA ni por la carpeta en la que casualmente se ejecuta.
+Una sesion solo tiene acceso a su proyecto autorizado.
+No se debe conceder acceso a otros proyectos por su nombre parecido,
+por pertenecer al mismo usuario ni por ser un subproyecto.
+El permiso para cambiar de proyecto solo lo emite el controlador
+confiable con autorizacion del propietario.
+
+
 UNA plataforma de memoria sirve a VARIOS clientes y proyectos, pero cada
 **sesion/conector** posee un contexto autorizado de proyecto y operaciones.
 No puede ver ni modificar memorias de otros proyectos simplemente porque
@@ -74,12 +88,13 @@ No conceder DELETE por defecto. Cada sesion de un mismo cliente
 puede tener grants distintos. No equivale a afirmar que estos
 sandbox ya existen o estan activados.
 
-## Cambio exclusivo de proyecto: Qwen SYPminer/Terminal PRO -> SynapSyS
+## Cambio exclusivo de proyecto: cualquier cliente, proyecto A -> proyecto B
 
-**Requisito obligatorio confirmado por el propietario**: cuando Qwen este
-trabajando en SYPminer/Terminal PRO y se solicite trabajar en SynapSyS,
-la peticion en lenguaje natural es solo un intento de cambio, NUNCA una
-autorizacion suficiente por si misma.
+**Requisito obligatorio confirmado por el propietario**: cuando CUALQUIER
+cliente (Qwen, OpenCode, Codex, OpenClaw u otro) cambie de CUALQUIER
+proyecto A a CUALQUIER proyecto B, la peticion en lenguaje natural
+es solo un intento de cambio, NUNCA una autorizacion suficiente por si
+misma. SYPminer -> SynapSyS es únicamente un ejemplo.
 
 1. El controlador confiable de sesiones debe solicitar autorizacion
    explicita al usuario, fuera del canal manipulable por la IA.
@@ -133,6 +148,21 @@ autorizacion suficiente por si misma.
 **Estado:** pendiente de desarrollo del controlador/sandbox y de pruebas
 de extremo a extremo; las capacidades MCP actuales por proceso no
 garantizan la revocacion fuerte.
+
+## Pruebas genericas obligatorias
+
+Los escenarios de prueba deben usar tambien nombres dinamicos ajenos
+a los proyectos reales (p. ej. gestor-domestico, web, app-android y
+proyecto-futuro-2040) para impedir depender de una lista especial:
+
+- Dos clientes del mismo proyecto comparten solo su memoria autorizada.
+- Un cliente de otro proyecto, sea cual sea su nombre, no obtiene datos.
+- Cambiar de cualquier proyecto A a B invalida el token de A.
+- No se puede modificar el proyecto de una consulta para saltarse el filtro.
+- Los permisos sobre archivos requieren sandbox externo, tambien para
+  proyectos no protegidos explícitamente por nombre.
+- Proyectos principales y secundarios quedan aislados por defecto;
+  el modo padre/hijo de acceso combinado sigue aplazado.
 
 ## Bloqueo de salida v0.2 -> estable
 

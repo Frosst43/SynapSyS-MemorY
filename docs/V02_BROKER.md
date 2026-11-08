@@ -4,6 +4,19 @@ No incluye IA. Es un broker local con sockets Unix y dos planos separados:
 - **Datos**: clientes con token de sesión, limitado a un proyecto y operaciones.
 - **Administración**: emitir, cambiar y revocar sesiones mediante clave admin.
 
+## Alcance: todos los programas y proyectos
+
+El broker no incluye nombres de proyectos especiales ni reconoce
+aplicaciones "privilegiadas" por su nombre. Un administrador confiable
+asigna cualquier identificador de proyecto valido a una sesion, con
+derechos limitados. Una nueva aplicacion tiene exactamente las mismas
+restricciones que un programa antiguo: sin concesion, sin acceso.
+Los ejemplos SYPminer -> SynapSyS solo ilustran la prueba.
+
+Esta regla es para memorias. Para archivos/repositorios, los agentes
+requieren un sandbox del sistema operativo configurado para cada
+proyecto. El broker NO puede proteger archivos por si solo.
+
 ## Aislamiento verificable en esta etapa
 
 - El cliente no elige proyecto ni permisos; el broker los vincula al token.
