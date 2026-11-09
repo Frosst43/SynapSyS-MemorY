@@ -44,9 +44,13 @@ No se incluye ni se ejecuta IA.
     PYTHONPATH=src python3 bench/benchmark.py --entries 10000 --queries 200
     python3 scripts/verify_mcp_stdio.py
 
-La tercera requiere `pip install -e '.[mcp]'` y no ha podido
-realizarse en el entorno de creación, donde no se puede obtener
-la dependencia. No inventar un PASS MCP.
+La tercera requiere `pip install -e '.[mcp]'`. **El 2026-11-09 el propietario
+la ejecutó en su propio Kubuntu** con `mcp==1.30.0`: la salida de consola
+compartida terminó en `PASS: MCP stdio + broker; lectura compartida,
+derechos y aislamiento`. Esta evidencia acredita el protocolo MCP
+stdio y broker con tres subprocesos de prueba; **no** el funcionamiento
+de aplicaciones OpenCode/Codex/OpenClaw instaladas ni sandbox de archivos.
+Ver [VALIDACION_MCP_KUBUNTU_2026-11-09.md](VALIDACION_MCP_KUBUNTU_2026-11-09.md).
 
 La prueba MCP usa temporal y tres procesos stdio: OpenCode (nombre
 simulado de conector, escritura), Codex (solo lectura), OpenClaw
