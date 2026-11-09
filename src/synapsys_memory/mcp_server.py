@@ -9,6 +9,7 @@ import os
 
 from .policy import ConnectorPolicy
 from .broker import BrokerClient
+from .session_secret import token_from_environment
 from .store import MemoryStore
 
 
@@ -98,7 +99,7 @@ def main() -> None:
     # rights and project from the token; MCP clients cannot escalate via env.
     broker_socket = os.environ.get("SYMEM_BROKER_SOCKET", "")
     if broker_socket:
-        token = os.environ.get("SYMEM_SESSION_TOKEN", "")
+        token = token_from_environment()
         with BrokerClient(broker_socket, token) as store:
             profile = store.profile()
             policy = ConnectorPolicy.from_values(profile["client"], ",".join(profile["rights"]))

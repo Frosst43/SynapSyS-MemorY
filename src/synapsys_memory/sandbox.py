@@ -32,10 +32,19 @@ class SandboxError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class MemoryBinding:
+    # Trusted host paths. Never accepted from the child process or its environment.
+    data_socket: Path
+    token_file: Path
+    space: str
+
+
+@dataclass(frozen=True)
 class ProjectSandbox:
     project_id: str
     workspace: Path
     read_only: bool
+    memory: MemoryBinding | None = None
 
 
 def _config_file(path: Path) -> None:
@@ -92,6 +101,32 @@ def _workspace(value: str) -> Path:
     return real
 
 
+def _trusted_memory_path(value: str, *, socket_file: bool) -> Path:
+    """Check trusted host-side broker socket or admin-provisioned token file."""
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise SandboxError("La ruta de memoria debe ser absoluta")
+    path = Path(value)
+    try:
+        real = path.resolve(strict=True)
+        st = path.lstat()
+        parent = path.parent.stat()
+    except OSError as exc:
+        raise SandboxError("Ruta de memoria inexistente o inaccesible") from exc
+    if real != path or path.is_symlink():
+        raise SandboxError("Ruta de memoria no canonica o con symlink")
+    if stat.S_IMODE(parent.st_mode) & 0o022:
+        raise SandboxError("Directorio de credenciales modificable por terceros")
+    if socket_file:
+        if not stat.S_ISSOCK(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o007:
+            raise SandboxError("El socket de datos debe ser Unix y no accesible a otros")
+    else:
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise SandboxError("La credencial debe ser un archivo regular sin hardlinks")
+        if st.st_uid not in (os.geteuid(), 0) or stat.S_IMODE(st.st_mode) & 0o077:
+            raise SandboxError("Credencial no protegida (requiere propietario y 0600)")
+    return real
+
+
 def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
     if not isinstance(project_id, str) or not _PROJECT_ID.fullmatch(project_id) or project_id in (".", ".."):
         raise SandboxError("Identificador de proyecto no valido")
@@ -107,14 +142,33 @@ def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
     if not isinstance(projects, dict) or project_id not in projects:
         raise SandboxError("El proyecto no esta autorizado en esta politica")
     item = projects[project_id]
-    if not isinstance(item, dict) or set(item) != {"workspace", "read_only"}:
+    required = {"workspace", "read_only"}
+    if not isinstance(item, dict) or not required <= set(item) or not set(item) <= required | {"memory"}:
         raise SandboxError("Politica del proyecto incompleta o ambigua")
     if type(item["read_only"]) is not bool:
         raise SandboxError("read_only debe ser booleano")
     ws = _workspace(item["workspace"])
     if path.is_relative_to(ws):
         raise SandboxError("Politica ubicada dentro del workspace escribible")
-    result = ProjectSandbox(project_id, ws, item["read_only"])
+    binding = None
+    if "memory" in item:
+        memory = item["memory"]
+        if not isinstance(memory, dict) or set(memory) != {"data_socket", "token_file", "space"}:
+            raise SandboxError("Memoria: se exigen exactamente data_socket, token_file y space")
+        if not isinstance(memory["space"], str) or not _PROJECT_ID.fullmatch(memory["space"]) or memory["space"] in (".", ".."):
+            raise SandboxError("Espacio de memoria no valido")
+        sock = _trusted_memory_path(memory["data_socket"], socket_file=True)
+        token = _trusted_memory_path(memory["token_file"], socket_file=False)
+        if sock == token:
+            raise SandboxError("Socket y credencial deben estar separados")
+        for other in projects.values():
+            if not isinstance(other, dict) or not isinstance(other.get("workspace"), str):
+                raise SandboxError("Definicion de proyecto invalida")
+            other_ws = _workspace(other["workspace"])
+            if sock.is_relative_to(other_ws) or token.is_relative_to(other_ws):
+                raise SandboxError("Credenciales de memoria dentro de un workspace")
+        binding = MemoryBinding(sock, token, memory["space"])
+    result = ProjectSandbox(project_id, ws, item["read_only"], binding)
     # Una base de SQLite del broker no debe quedar dentro del workspace de agente.
     # Esa separacion se asegura al desplegar el broker bajo otro UID.
     return result
@@ -140,6 +194,18 @@ def build_command(spec: ProjectSandbox, program: list[str], *, bwrap: str) -> li
         "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
         "--tmpfs", "/run", "--dir", "/workspace",
         "--ro-bind" if spec.read_only else "--bind", str(spec.workspace), "/workspace",
+    ]
+    if spec.memory is not None:
+        # Bind precisely the data socket and single-project token, never
+        # the parent directory (which may contain admin.sock / SQLite).
+        args += [
+            "--dir", "/run/synapsys-memory",
+            "--ro-bind", str(spec.memory.data_socket), "/run/synapsys-memory/data.sock",
+            "--ro-bind", str(spec.memory.token_file), "/run/synapsys-memory/session.token",
+            "--setenv", "SYMEM_BROKER_SOCKET", "/run/synapsys-memory/data.sock",
+            "--setenv", "SYMEM_SESSION_TOKEN_FILE", "/run/synapsys-memory/session.token",
+        ]
+    args += [
         "--setenv", "HOME", "/tmp", "--setenv", "TMPDIR", "/tmp",
         "--setenv", "XDG_CACHE_HOME", "/tmp/.cache",
         "--setenv", "XDG_CONFIG_HOME", "/tmp/.config",
@@ -163,6 +229,21 @@ def _trusted_bwrap() -> str:
     return str(binary)
 
 
+def _check_memory_session(spec: ProjectSandbox) -> None:
+    """Fail closed on wrong project/space grants; broker supplies identity."""
+    if spec.memory is None:
+        return
+    from .broker import BrokerClient
+    from .session_secret import read_token_file
+    try:
+        token = read_token_file(spec.memory.token_file)
+        actual = BrokerClient(spec.memory.data_socket, token).profile()
+    except (OSError, ValueError, PermissionError, RuntimeError) as exc:
+        raise SandboxError("No se puede verificar el permiso de memoria del proyecto") from exc
+    if actual.get("project") != spec.project_id or actual.get("space") != spec.memory.space:
+        raise SandboxError("Permiso de memoria asignado a un proyecto/espacio distinto")
+
+
 def run(policy: str | Path, project_id: str, program: list[str], *, dry_run: bool = False) -> int | list[str]:
     # Policy verification takes place before even looking for bwrap.
     spec = load_policy(policy, project_id)
@@ -170,6 +251,7 @@ def run(policy: str | Path, project_id: str, program: list[str], *, dry_run: boo
     cmd = build_command(spec, program, bwrap=bwrap)
     if dry_run:
         return cmd
+    _check_memory_session(spec)
     try:
         return subprocess.run(cmd, check=False).returncode
     except OSError as exc:
