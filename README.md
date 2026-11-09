@@ -7,9 +7,9 @@ El motor es determinista: guarda y busca datos que sus aplicaciones cliente entr
 
 ## Estado
 
-- **v0.2.0.dev4 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
+- **v0.2.0.dev5 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
 - **SQLite + FTS5/BM25**: búsqueda local y almacenamiento persistente.
-- **MCP stdio**: adaptador opcional; el protocolo y los tres clientes reales siguen pendientes de verificación en la máquina de destino.
+- **MCP stdio**: protocolo validado en Kubuntu (09/11/2026) con tres procesos de prueba; OpenCode, Codex y OpenClaw reales siguen pendientes.
 - **Política por proceso MCP**: herramientas de lectura, escritura y borrado separadas.
 - **Versiones y concurrencia**: correcciones y borrados con `expected_revision` para evitar sobrescrituras silenciosas.
 - **Auditoría ligera**: acción, versión, fecha y actor, sin recuperar texto borrado.
@@ -111,9 +111,10 @@ todos los proyectos presentes y futuros siguen las mismas reglas.
   separados. Sigue pendiente conectar su socket de datos y credenciales
   de modo seguro, sin exponer el socket administrador.
 - **Probado:** 20 tests del nuevo lanzador; regresión de dev2+dev4
-  65/65 en una copia local. **No validado:** aislamiento real mediante
-  bwrap (no instalado en el entorno de pruebas), agentes reales,
-  MCP extremo a extremo y regresión completa de dev3+dev4.
+  65/65 en una copia local. **Validado en Kubuntu:** aislamiento real básico mediante
+  bwrap, con proyecto A escribible y proyecto B invisible (09/11/2026).
+  **Pendiente:** agentes reales, puente conjunto sandbox+broker,
+  aislamiento multi-UID de producción y regresión completa.
 
 Prueba real, aislada de repositorios del usuario:
 
@@ -124,3 +125,31 @@ PYTHONPATH=src python3 scripts/verify_sandbox_bwrap.py
 Esta prueba devuelve error de forma explícita si no puede ejecutar
 Bubblewrap. No fusionar a `main` sin validaciones físicas y de
 integración. Ver [documentación del sandbox](docs/V02_SANDBOX_UNIVERSAL.md).
+
+## Puente opcional sandbox + broker (dev5 experimental)
+
+La política del sandbox puede incluir `memory` con el socket Unix de
+**datos**, un archivo privado de token de sesión y el espacio autorizado.
+El lanzador valida que el token corresponda al proyecto y espacio exactos,
+monta únicamente esos dos objetos y no expone SQLite ni el socket admin.
+El adaptador MCP admite `SYMEM_SESSION_TOKEN_FILE` para leer un token
+montado de solo lectura sin colocarlo en `argv`.
+
+El 09/11/2026 la prueba física de **Bubblewrap aislado** terminó PASS
+en Kubuntu, además de la prueba **MCP stdio** realizada previamente.
+La combinación de ambas piezas necesita una última prueba real:
+
+```bash
+cd ~/Documentos/SynapSyS-MemorY
+git pull --ff-only
+PYTHONPATH=src .venv/bin/python scripts/verify_sandbox_broker_bridge.py
+```
+
+El script usa exclusivamente proyectos y una base temporal; **no toca
+SynapSyS Mobile, SynapSyS ni SYPcoin**. Si falla, no activa un modo sin
+sandbox. No conectar agentes a repositorios reales sin verificar ese paso
+y el aislamiento de sus procesos y credenciales.
+
+[Puente sandbox y broker](docs/V02_SANDBOX_BROKER_BRIDGE.md) ·
+[Resultado Bubblewrap Kubuntu](docs/VALIDACION_SANDBOX_KUBUNTU_2026-11-09.md) ·
+[Resultado MCP Kubuntu](docs/VALIDACION_MCP_KUBUNTU_2026-11-09.md).
