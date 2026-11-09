@@ -29,9 +29,9 @@ def query(action,**args):
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
         client.settimeout(4)
         client.connect(sockpath)
-        client.sendall((json.dumps(message)+'\\n').encode('utf-8'))
+        client.sendall((json.dumps(message)+'\n').encode('utf-8'))
         buf=bytearray()
-        while not buf.endswith(b'\\n'):
+        while not buf.endswith(b'\n'):
             block=client.recv(16384)
             if not block: raise AssertionError('Broken broker response')
             buf.extend(block)
