@@ -7,7 +7,7 @@ El motor es determinista: guarda y busca datos que sus aplicaciones cliente entr
 
 ## Estado
 
-- **v0.2.0.dev3 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
+- **v0.2.0.dev4 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
 - **SQLite + FTS5/BM25**: búsqueda local y almacenamiento persistente.
 - **MCP stdio**: adaptador opcional; el protocolo y los tres clientes reales siguen pendientes de verificación en la máquina de destino.
 - **Política por proceso MCP**: herramientas de lectura, escritura y borrado separadas.
@@ -90,3 +90,37 @@ La prueba verifica que un cliente escribe, otro de solo lectura recupera el dato
 El broker vincula cada token al UID real del proceso cliente (identidad del kernel Unix), comprueba permisos de archivos y sockets antes de arrancar y crea SQLite con permisos 0600 desde el inicio. Para despliegue con diferentes cuentas Linux existen `--peer-uid` (grant/switch) y `--client-gid` (serve). Esto **no sustituye** un sandbox de archivos por proyecto ni autoriza a un agente a decidir sus propios permisos.
 
 Ver [guía de aislamiento OS](docs/V02_OS_ISOLATION.md).
+
+## Sandbox universal por proyecto (dev4, experimental)
+
+Nuevo lanzador opcional **`synapsys-memory-sandbox`** para Linux,
+con una política privada de proyectos que asigna un único directorio
+de trabajo a cada proceso. Usa **Bubblewrap** para montar solo ese
+workspace y las librerías básicas del sistema en lectura, sin
+montar el HOME completo ni los otros repositorios y con red desactivada
+por defecto. El lanzador **no tiene ninguna excepción por nombre**:
+todos los proyectos presentes y futuros siguen las mismas reglas.
+
+- Rechaza proyectos no registrados, políticas inseguras, rutas demasiado
+  amplias, enlaces simbólicos de raíz y submontajes.
+- Falla sin ejecutar el agente si falta bwrap o su lanzamiento falla.
+- No convierte automáticamente a una IA ya ejecutada sin límites en
+  una IA aislada: es obligatorio lanzarla **desde el principio** dentro
+  del sandbox.
+- El broker de memoria y el sandbox de archivos son componentes
+  separados. Sigue pendiente conectar su socket de datos y credenciales
+  de modo seguro, sin exponer el socket administrador.
+- **Probado:** 20 tests del nuevo lanzador; regresión de dev2+dev4
+  65/65 en una copia local. **No validado:** aislamiento real mediante
+  bwrap (no instalado en el entorno de pruebas), agentes reales,
+  MCP extremo a extremo y regresión completa de dev3+dev4.
+
+Prueba real, aislada de repositorios del usuario:
+
+```bash
+PYTHONPATH=src python3 scripts/verify_sandbox_bwrap.py
+```
+
+Esta prueba devuelve error de forma explícita si no puede ejecutar
+Bubblewrap. No fusionar a `main` sin validaciones físicas y de
+integración. Ver [documentación del sandbox](docs/V02_SANDBOX_UNIVERSAL.md).
