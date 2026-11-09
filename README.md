@@ -1,35 +1,27 @@
 # SynapSyS-MemorY
 
-**Motor de memoria independiente, rapido, local y 100% sin IA interna.**
+**Motor persistente e independiente de memoria para conectar OpenCode, Codex, OpenClaw y proyectos propios.**
 
-Estado: **v0.1.0 / base funcional**. Repositorio privado. Motor sin
-modelos, embeddings, nubes ni GPU. Adaptador MCP stdio opcional.
-La integracion end-to-end con OpenCode/OpenClaw sigue pendiente de validar.
+No incluye inteligencia artificial, embeddings, modelos, Ollama, nube ni GPU.
+El motor es determinista: guarda y busca datos que sus aplicaciones cliente entregan.
 
-**Decision de arquitectura: SynapSyS-MemorY NO implementa IA.**
-Es una infraestructura de almacenamiento y consulta para aplicaciones
-que SI pueden contener IA. Las aplicaciones eligen que conservar
-mediante las herramientas de memoria. El motor aplica reglas
-deterministas y no interpreta por su cuenta conversaciones.
+## Estado
 
-## Principios
+- **v0.2.0.dev5 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
+- **SQLite + FTS5/BM25**: búsqueda local y almacenamiento persistente.
+- **MCP stdio**: protocolo validado en Kubuntu (09/11/2026) con tres procesos de prueba; OpenCode, Codex y OpenClaw reales siguen pendientes.
+- **Política por proceso MCP**: herramientas de lectura, escritura y borrado separadas.
+- **Versiones y concurrencia**: correcciones y borrados con `expected_revision` para evitar sobrescrituras silenciosas.
+- **Auditoría ligera**: acción, versión, fecha y actor, sin recuperar texto borrado.
+- **Migración de v0.1**: conservadora, mediante `PRAGMA user_version=2`.
 
-- **Una memoria, multiples aplicaciones**: se puede compartir un espacio
-  entre distintas IAs solo si esta autorizado expresamente.
-- **Aislamiento por defecto**: filtros de espacio y proyecto en v0.1;
-  permisos fuertes por conector pendientes de desarrollo.
-- **Rapidez sin modelos**: SQLite con FTS5/BM25, WAL e indices locales.
-- **Control y trazabilidad**: fuente, fecha, tags, prioridad, correccion,
-  borrado y respaldo. Historial temporal versionado: hoja de ruta.
-- **Contexto limitado**: recuperar solo registros relevantes mediante
-  limites de resultados y texto, sin cargar conversaciones completas.
-- **Sin inferencia**: ni LLM, ni embeddings, ni Ollama, ni GPU.
-- **Recuerdos como datos**: nunca ejecutar instrucciones que aparezcan
-  en un recuerdo; no introducir credenciales.
+### Aviso importante de permisos
 
-## Instalacion
+Estos permisos restringen las herramientas expuestas por cada proceso MCP; **no son autenticación fuerte**. Cualquier proceso con permisos del sistema operativo para leer el archivo SQLite podría ignorar esos filtros. Para conectar usuarios no confiables o equipos distintos se necesitará un servicio intermediario autenticado y una configuración de permisos de archivos apropiada. **No exponer directamente la base ni MCP stdio en Internet**.
 
-Python 3.11+ con SQLite compilado con FTS5.
+## Instalación local
+
+Python 3.11+ con soporte SQLite FTS5:
 
 ```bash
 python3 -m venv .venv
@@ -37,73 +29,127 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
-El adaptador MCP es opcional:
+Para el protocolo MCP (dependencia de protocolo, no una IA):
 
 ```bash
 python -m pip install -e '.[mcp]'
 ```
 
-La dependencia del protocolo MCP NO es una IA.
-
-## Uso por terminal
+## Ejemplo básico por CLI
 
 ```bash
-synapsys-memory --space personal --project demo remember "El proyecto usa Python" --kind decision --title "Lenguaje"
-synapsys-memory --space personal --project demo recall "proyecto Python"
-synapsys-memory --space personal --project demo recent
-synapsys-memory --space personal --project demo stats
-synapsys-memory --space personal --project demo backup ~/memoria-respaldo.sqlite3
+synapsys-memory --space compartido --project demo remember 'Bloques de cuatro minutos' --kind decision --title 'Consenso'
+synapsys-memory --space compartido --project demo recall 'consenso bloques'
+synapsys-memory --space compartido --project demo stats
+synapsys-memory --space compartido --project demo check
 ```
 
-Ruta por defecto: `~/.local/share/synapsys-memory/memory.sqlite3`.
-No publicar bases, backups, contraseñas ni tokens en Git.
+Ruta por defecto: `~/.local/share/synapsys-memory/memory.sqlite3`. Se puede modificar con `SYMEM_DB` o `--db`. La base y sus respaldos quedan fuera de Git.
 
-## MCP stdio
+Para modificar desde la CLI se puede utilizar `--expected-revision N` tras `update` o `forget`. Los clientes MCP deben enviar obligatoriamente una revisión esperada para esas operaciones.
 
-Herramientas: `memory_remember`, `memory_recall`, `memory_recent`,
-`memory_get`, `memory_update`, `memory_forget`, `memory_stats`.
+## Conectar dos aplicaciones al mismo proyecto (en preparacion)
 
-```bash
-SYMEM_SPACE=personal SYMEM_PROJECT=demo synapsys-memory-mcp
-```
+El adaptador MCP actual exige `SYMEM_BROKER_SOCKET` y `SYMEM_SESSION_TOKEN` emitido por un administrador confiable. No basta configurar `SYMEM_DB`, `SYMEM_SPACE` y `SYMEM_PROJECT`: el acceso SQLite directo queda **desactivado por defecto**.
 
-La IA cliente decide cuándo invocar las herramientas; el servidor
-no ejecuta IA y nunca debe escribir logs de depuracion en stdout.
+Los permisos y el proyecto se asignan mediante concesiones del broker, no desde la IA. No guardar tokens reales en repositorios, archivos de configuración compartidos ni prompts. Los clientes con el mismo UID de Linux **no** quedan aislados mediante este mecanismo por sí solo.
 
-- [OpenCode: ejemplos de configuracion](examples/opencode-v1.json).
-- [OpenCode: ejemplo alternativo](examples/opencode-v2.json).
-- [OpenClaw: guia inicial](examples/openclaw.md).
+Las configuraciones de cliente deben utilizar un lanzador confiable con sandbox. La integración con clientes reales está pendiente.
 
-Los ejemplos contienen rutas por sustituir y no certifican una
-conexion real con las aplicaciones instaladas.
+Referencias: [OpenCode](examples/opencode-v1.json), [Codex](examples/codex.toml), [OpenClaw](examples/openclaw.md). Las rutas deben adaptarse a la instalación. La incorporación a los clientes no está ejecutada.
 
-## Pruebas y benchmark
+## Pruebas
+
+Sin bibliotecas externas:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 bench/benchmark.py --entries 2000 --queries 100
+PYTHONPATH=src python3 bench/benchmark.py --entries 10000 --queries 200
 ```
 
-Los objetivos de rendimiento deben comprobarse en el equipo de destino.
+Prueba **real de protocolo MCP stdio** con tres procesos en una base temporal (requiere el extra MCP):
 
-## Limitaciones actuales
+```bash
+python3 scripts/verify_mcp_stdio.py
+```
 
-- FTS5 busca terminos; no comprende sinonimos ni parafrasis por inferencia.
-  Las mejoras futuras seran algoritmos tradicionales deterministas.
-- No hay extraccion automatica de conversaciones; los clientes deben
-  guardar los recuerdos mediante API/MCP.
-- Los espacios se separan por filtros SQL, no con autenticacion
-  fuerte entre procesos que puedan abrir el archivo directamente.
-- `memory_forget` borra la base activa, no backups independientes.
-- No hay API HTTP, sincronizacion en red ni conectores ya instalados.
+La prueba verifica que un cliente escribe, otro de solo lectura recupera el dato y un tercero de otro proyecto no lo ve. **No prueba todavía OpenCode, Codex ni OpenClaw reales**.
 
-## Proximas fases (sin IA)
+## Lo que sigue pendiente
 
-1. Protocolo MCP e integraciones reales; permisos y aislamiento.
-2. Busqueda FTS5 avanzada, filtros, coincidencia exacta y opcional
-   aproximada mediante algoritmos clasicos.
-3. Historico de decisiones, vigencia, relaciones explicitas y TTL.
-4. Conectores reutilizables y administracion de accesos.
+- Validar handshake y herramientas MCP en un entorno con SDK instalado.
+- Integración verificada con versiones reales de OpenCode, Codex y OpenClaw.
+- Broker autenticado y permisos sólidos para procesos que no compartan confianza.
+- Versionado de contenido completo, restauración y exportaciones; solo tenemos auditoría de acciones.
+- Pruebas de concurrencia más exigentes y evaluación de rendimiento en hardware de destino.
 
-Detalles: [arquitectura](docs/ARCHITECTURE.md) y
-[hoja de ruta SIN IA](docs/ROADMAP_MEMORY_INTELLIGENCE.md).
+[Arquitectura multicliente](docs/MULTI_CLIENT_ARCHITECTURE.md) · [Hoja de ruta sin IA](docs/ROADMAP_MEMORY_INTELLIGENCE.md) · [Alcance de v0.2](docs/V02_SECURITY_AND_TESTS.md)
+
+## Endurecimiento experimental (dev3)
+
+El broker vincula cada token al UID real del proceso cliente (identidad del kernel Unix), comprueba permisos de archivos y sockets antes de arrancar y crea SQLite con permisos 0600 desde el inicio. Para despliegue con diferentes cuentas Linux existen `--peer-uid` (grant/switch) y `--client-gid` (serve). Esto **no sustituye** un sandbox de archivos por proyecto ni autoriza a un agente a decidir sus propios permisos.
+
+Ver [guía de aislamiento OS](docs/V02_OS_ISOLATION.md).
+
+## Sandbox universal por proyecto (dev4, experimental)
+
+Nuevo lanzador opcional **`synapsys-memory-sandbox`** para Linux,
+con una política privada de proyectos que asigna un único directorio
+de trabajo a cada proceso. Usa **Bubblewrap** para montar solo ese
+workspace y las librerías básicas del sistema en lectura, sin
+montar el HOME completo ni los otros repositorios y con red desactivada
+por defecto. El lanzador **no tiene ninguna excepción por nombre**:
+todos los proyectos presentes y futuros siguen las mismas reglas.
+
+- Rechaza proyectos no registrados, políticas inseguras, rutas demasiado
+  amplias, enlaces simbólicos de raíz y submontajes.
+- Falla sin ejecutar el agente si falta bwrap o su lanzamiento falla.
+- No convierte automáticamente a una IA ya ejecutada sin límites en
+  una IA aislada: es obligatorio lanzarla **desde el principio** dentro
+  del sandbox.
+- El broker de memoria y el sandbox de archivos son componentes
+  separados. Sigue pendiente conectar su socket de datos y credenciales
+  de modo seguro, sin exponer el socket administrador.
+- **Probado:** 20 tests del nuevo lanzador; regresión de dev2+dev4
+  65/65 en una copia local. **Validado en Kubuntu:** aislamiento real básico mediante
+  bwrap, con proyecto A escribible y proyecto B invisible (09/11/2026).
+  **Pendiente:** agentes reales, puente conjunto sandbox+broker,
+  aislamiento multi-UID de producción y regresión completa.
+
+Prueba real, aislada de repositorios del usuario:
+
+```bash
+PYTHONPATH=src python3 scripts/verify_sandbox_bwrap.py
+```
+
+Esta prueba devuelve error de forma explícita si no puede ejecutar
+Bubblewrap. No fusionar a `main` sin validaciones físicas y de
+integración. Ver [documentación del sandbox](docs/V02_SANDBOX_UNIVERSAL.md).
+
+## Puente opcional sandbox + broker (dev5 experimental)
+
+La política del sandbox puede incluir `memory` con el socket Unix de
+**datos**, un archivo privado de token de sesión y el espacio autorizado.
+El lanzador valida que el token corresponda al proyecto y espacio exactos,
+monta únicamente esos dos objetos y no expone SQLite ni el socket admin.
+El adaptador MCP admite `SYMEM_SESSION_TOKEN_FILE` para leer un token
+montado de solo lectura sin colocarlo en `argv`.
+
+El 09/11/2026 la prueba física de **Bubblewrap aislado** terminó PASS
+en Kubuntu, además de la prueba **MCP stdio** realizada previamente.
+La combinación de ambas piezas necesita una última prueba real:
+
+```bash
+cd ~/Documentos/SynapSyS-MemorY
+git pull --ff-only
+PYTHONPATH=src .venv/bin/python scripts/verify_sandbox_broker_bridge.py
+```
+
+El script usa exclusivamente proyectos y una base temporal; **no toca
+SynapSyS Mobile, SynapSyS ni SYPcoin**. Si falla, no activa un modo sin
+sandbox. No conectar agentes a repositorios reales sin verificar ese paso
+y el aislamiento de sus procesos y credenciales.
+
+[Puente sandbox y broker](docs/V02_SANDBOX_BROKER_BRIDGE.md) ·
+[Resultado Bubblewrap Kubuntu](docs/VALIDACION_SANDBOX_KUBUNTU_2026-11-09.md) ·
+[Resultado MCP Kubuntu](docs/VALIDACION_MCP_KUBUNTU_2026-11-09.md).

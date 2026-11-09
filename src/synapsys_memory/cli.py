@@ -12,6 +12,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, help="Ruta de la base SQLite")
     parser.add_argument("--space", default="personal", help="Espacio aislado o compartido")
     parser.add_argument("--project", default="", help="Proyecto aislado (opcional)")
+    parser.add_argument("--actor", default="terminal", help="Origen de cambios de la CLI")
     commands = parser.add_subparsers(dest="command", required=True)
     save = commands.add_parser("remember", help="Guardar un recuerdo")
     save.add_argument("body")
@@ -28,14 +29,20 @@ def build_parser() -> argparse.ArgumentParser:
     recent = commands.add_parser("recent", help="Memorias recientes")
     recent.add_argument("--limit", type=int, default=20)
     recent.add_argument("--kind")
-    for command in ("get", "forget"):
+    for command in ("get", "forget", "audit"):
         action = commands.add_parser(command)
         action.add_argument("id")
+        if command == "forget":
+            action.add_argument("--expected-revision", type=int)
+        if command == "audit":
+            action.add_argument("--limit", type=int, default=50)
     update = commands.add_parser("update", help="Corregir memoria existente")
     update.add_argument("id")
     update.add_argument("body")
     update.add_argument("--title", default="")
+    update.add_argument("--expected-revision", type=int)
     commands.add_parser("stats", help="Estadisticas")
+    commands.add_parser("check", help="Comprueba la integridad basica de SQLite")
     backup = commands.add_parser("backup", help="Respaldar SQLite")
     backup.add_argument("destination", type=Path)
     return parser
@@ -44,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        with MemoryStore(args.db, space=args.space, project=args.project) as store:
+        with MemoryStore(args.db, space=args.space, project=args.project, actor=args.actor) as store:
             if args.command == "remember":
                 result = store.remember(args.body, title=args.title, kind=args.kind,
                                         tags=args.tag, source=args.source,
@@ -56,17 +63,22 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "get":
                 result = store.get(args.id)
             elif args.command == "forget":
-                result = {"deleted": store.forget(args.id)}
+                result = {"deleted": store.forget(args.id, expected_revision=args.expected_revision)}
             elif args.command == "update":
-                result = store.update(args.id, body=args.body, title=args.title)
+                result = store.update(args.id, body=args.body, title=args.title,
+                                      expected_revision=args.expected_revision)
             elif args.command == "stats":
                 result = store.stats()
+            elif args.command == "audit":
+                result = store.audit(args.id, limit=args.limit)
+            elif args.command == "check":
+                result = {"integrity_ok": store.check_integrity()}
             elif args.command == "backup":
                 result = {"backup": store.backup(args.destination)}
             else:
                 raise ValueError("Comando desconocido")
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         build_parser().exit(2, f"Error: {exc}\n")
     return 2

@@ -1,33 +1,34 @@
-# OpenClaw: integracion pendiente de prueba en una instalacion real
+# OpenClaw — Conectar SynapSyS-MemorY
 
-OpenClaw dispone de un gestor MCP para definiciones salientes y soporte de
-herramientas MCP mediante sus mecanismos de integracion. La configuracion
-concreta depende de la version y no debe inventarse ni instalarse a ciegas.
+No sustituir automáticamente la memoria nativa de OpenClaw; el objetivo
+es compartir proyectos entre varios clientes, con permisos explícitos.
 
-Preparacion comun:
+La documentación actual de OpenClaw admite servidores externos en
+`mcp.servers` con transporte `stdio` y configuración mediante UI/CLI.
+Para una instalación real, revisar la versión instalada antes de registrar.
+
+## Preparación
 
 ```bash
 cd /RUTA/AL/REPO
+python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[mcp]'
-SYMEM_SPACE=shared SYMEM_PROJECT=demo .venv/bin/synapsys-memory-mcp
 ```
 
-Ese ultimo comando queda esperando el handshake por stdio: no es una terminal
-interactiva. En una version de OpenClaw que admita servidores MCP salientes,
-registre el servidor con la ruta absoluta (sin ejecutar aun capturas automaticas):
+En la configuración MCP de OpenClaw, añadir servidor de tipo `stdio`:
 
-```bash
-openclaw mcp add synapsys-memory \
-  --command /RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp \
-  --env SYMEM_SPACE=shared \
-  --env SYMEM_PROJECT=demo
-openclaw mcp doctor synapsys-memory --probe
-```
+- Comando: `/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp`
+- Entorno: `SYMEM_DB=/RUTA/PRIVADA/memory.sqlite3`
+- Entorno: `SYMEM_SPACE=shared`
+- Entorno: `SYMEM_PROJECT=demo`
+- Entorno: `SYMEM_CLIENT=openclaw`
+- Entorno: `SYMEM_RIGHTS=read`
 
-El ultimo comando comprueba una conexion real. Antes de habilitar herramientas
-para todos los agentes, revise los permisos de escritura y borrado.
+La base de datos y proyecto deben ser los mismos que los de OpenCode y Codex
+para compartir datos; los derechos pueden ser distintos. Configurar
+separadamente cada cliente. No utilizar rutas relativas en producción.
 
-Ver la documentacion oficial actual: https://docs.openclaw.ai/mcp
+Una vez guardado, revisar con `openclaw mcp doctor <nombre> --probe`.
+No se ha instalado ni validado OpenClaw real en este entorno.
 
-**Estado**: servidor MCP implementado en el repo, compatibilidad real con
-OpenClaw aun no probada. No se ha tocado ninguna configuracion del usuario.
+Referencia oficial: https://docs.openclaw.ai/tools/mcp

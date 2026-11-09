@@ -1,0 +1,5 @@
+# Fragmento para ~/.codex/config.toml o .codex/config.toml.
+# No ejecutar automáticamente. Sustituir rutas absolutas.
+[mcp_servers.synapsys_memory]
+command = "/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp"
+env = { SYMEM_DB = "/RUTA/PRIVADA/memory.sqlite3", SYMEM_SPACE = "shared", SYMEM_PROJECT = "demo", SYMEM_CLIENT = "codex", SYMEM_RIGHTS = "read" }
