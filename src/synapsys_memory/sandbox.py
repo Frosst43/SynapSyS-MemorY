@@ -18,6 +18,8 @@ import subprocess
 import sys
 from typing import Any
 
+from .secureio import strict_json_loads, read_private
+
 _PROJECT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,95}$")
 _SYSTEM_RUNTIME = ("/usr", "/bin", "/lib", "/lib64", "/sbin")
 _UNSAFE_ROOTS = frozenset({
@@ -92,13 +94,41 @@ def _workspace(value: str) -> Path:
     if path.is_symlink() or not path.is_dir():
         raise SandboxError("El workspace debe ser directorio real, sin symlink en la raiz")
     real = path.resolve(strict=True)
-    if real.as_posix() in _UNSAFE_ROOTS or real == Path.home().resolve():
+    system_trees = ("/usr", "/etc", "/bin", "/sbin", "/lib", "/lib64", "/proc", "/sys", "/dev", "/boot", "/run")
+    if (real.as_posix() in _UNSAFE_ROOTS or real == Path.home().resolve()
+            or any(real.is_relative_to(Path(base).resolve()) for base in system_trees)):
         raise SandboxError("Workspace demasiado amplio o reservado para el sistema")
     if real != path:
         # Rutas con .. o componentes intermedios redirigidos; exigir forma canonica.
         raise SandboxError("Workspace no canonico: evita symlinks y componentes ..")
     _reject_nested_mounts(real)
     return real
+
+
+def _audit_workspace(workspace: Path) -> None:
+    """Preflight only: host processes must not mutate this tree during launch.
+
+    A hardlink to a foreign file remains the same inode through a bind mount.
+    Special files could expose host sockets/devices despite network isolation.
+    """
+    count = 0
+    def fail(exc):
+        raise SandboxError("Workspace tree cannot be inspected") from exc
+    for folder, dirs, files in os.walk(workspace, followlinks=False, onerror=fail):
+        for name in dirs + files:
+            count += 1
+            if count > 200_000:
+                raise SandboxError("Workspace audit limit exceeded")
+            item = Path(folder) / name
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                if not item.resolve(strict=False).is_relative_to(workspace):
+                    raise SandboxError("Workspace symlink escapes its project")
+            elif stat.S_ISREG(info.st_mode):
+                if info.st_nlink != 1:
+                    raise SandboxError("Workspace contains hardlinked files")
+            elif not stat.S_ISDIR(info.st_mode):
+                raise SandboxError("Workspace contains socket, FIFO or device")
 
 
 def _trusted_memory_path(value: str, *, socket_file: bool) -> Path:
@@ -133,7 +163,7 @@ def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
     path = Path(policy_path)
     _config_file(path)
     try:
-        config: Any = json.loads(path.read_text(encoding="utf-8"))
+        config: Any = strict_json_loads(read_private(path, limit=1024 * 1024))
     except (OSError, ValueError, UnicodeError) as exc:
         raise SandboxError("No se puede leer la politica de proyectos") from exc
     if not isinstance(config, dict) or set(config) != {"schema_version", "projects"} or type(config["schema_version"]) is not int or config["schema_version"] != 1:
@@ -141,15 +171,25 @@ def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
     projects = config["projects"]
     if not isinstance(projects, dict) or project_id not in projects:
         raise SandboxError("El proyecto no esta autorizado en esta politica")
-    item = projects[project_id]
     required = {"workspace", "read_only"}
-    if not isinstance(item, dict) or not required <= set(item) or not set(item) <= required | {"memory"}:
-        raise SandboxError("Politica del proyecto incompleta o ambigua")
-    if type(item["read_only"]) is not bool:
-        raise SandboxError("read_only debe ser booleano")
-    ws = _workspace(item["workspace"])
-    if path.is_relative_to(ws):
-        raise SandboxError("Politica ubicada dentro del workspace escribible")
+    workspaces: dict[str, Path] = {}
+    for name, definition in projects.items():
+        if (not isinstance(name, str) or not _PROJECT_ID.fullmatch(name)
+                or not isinstance(definition, dict)
+                or not required <= set(definition)
+                or not set(definition) <= required | {"memory"}
+                or type(definition["read_only"]) is not bool):
+            raise SandboxError("Politica del proyecto incompleta o ambigua")
+        candidate = _workspace(definition["workspace"])
+        if path.is_relative_to(candidate):
+            raise SandboxError("Policy is inside a registered project")
+        for previous in workspaces.values():
+            if candidate.is_relative_to(previous) or previous.is_relative_to(candidate):
+                raise SandboxError("Project workspaces overlap; combined projects are not enabled")
+        workspaces[name] = candidate
+    item = projects[project_id]
+    ws = workspaces[project_id]
+    _audit_workspace(ws)
     binding = None
     if "memory" in item:
         memory = item["memory"]
@@ -253,7 +293,7 @@ def run(policy: str | Path, project_id: str, program: list[str], *, dry_run: boo
         return cmd
     _check_memory_session(spec)
     try:
-        return subprocess.run(cmd, check=False).returncode
+        return subprocess.run(cmd, check=False, close_fds=True).returncode
     except OSError as exc:
         raise SandboxError("No se ha podido iniciar el aislamiento; no se ejecuta sin sandbox") from exc
 

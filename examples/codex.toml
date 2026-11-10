@@ -1,5 +1,5 @@
-# Fragmento para ~/.codex/config.toml o .codex/config.toml.
-# No ejecutar automáticamente. Sustituir rutas absolutas.
+# Fragment only; see examples/README.md. Not a sandbox or installation.
+# Never put real tokens or an admin key in this file.
 [mcp_servers.synapsys_memory]
-command = "/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp"
-env = { SYMEM_DB = "/RUTA/PRIVADA/memory.sqlite3", SYMEM_SPACE = "shared", SYMEM_PROJECT = "demo", SYMEM_CLIENT = "codex", SYMEM_RIGHTS = "read" }
+command = "/RUTA/AL/RUNTIME/synapsys-memory-mcp"
+env = { SYMEM_BROKER_SOCKET = "/RUTA/PRIVADA/data.sock", SYMEM_SESSION_TOKEN_FILE = "/RUTA/PRIVADA/session.token" }

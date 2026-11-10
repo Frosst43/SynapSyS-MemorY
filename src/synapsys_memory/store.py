@@ -16,6 +16,9 @@ import threading
 import time
 from typing import Any
 from uuid import uuid4
+from contextlib import contextmanager, closing
+
+from .secureio import reserve_private
 
 SCHEMA_VERSION = 2
 
@@ -117,46 +120,62 @@ class MemoryStore:
         self.path = Path(path or os.environ.get("SYMEM_DB", _DEFAULT_DB)).expanduser()
         if str(self.path) == ":memory:":
             raise ValueError("Se requiere una base persistente; use un archivo SQLite")
-        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if os.name == "posix" and self.path.parent.name == "synapsys-memory":
-            os.chmod(self.path.parent, 0o700)
-        # Reservar atomicamente el archivo SQLite con modo 0600 ANTES de
-        # abrirlo. sqlite3.connect por si solo respeta un umask potencialmente
-        # permisivo, lo que crearia una ventana de exposicion.
-        if self.path.is_symlink():
-            raise ValueError("No se admite SQLite a traves de enlaces simbolicos")
-        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
-        try:
-            fd = os.open(self.path, flags, 0o600)
-        except FileExistsError:
-            if self.path.is_symlink():
-                raise ValueError("SQLite no puede ser enlace simbolico")
-        else:
-            os.close(fd)
+        self.path = reserve_private(self.path)
         self._lock = threading.RLock()
         self._db = sqlite3.connect(self.path, timeout=5, check_same_thread=False)
         self._db.row_factory = sqlite3.Row
-        if os.name == "posix":
-            os.chmod(self.path, 0o600)
         try:
             with self._lock:
                 version = int(self._db.execute("PRAGMA user_version").fetchone()[0])
                 if version > SCHEMA_VERSION:
                     raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
                 self._db.execute("PRAGMA busy_timeout=5000")
-                self._db.execute("PRAGMA journal_mode=WAL")
-                self._db.execute("PRAGMA synchronous=NORMAL")
+                self._configure_wal()
+                self._db.execute("PRAGMA synchronous=FULL")
                 self._db.execute("PRAGMA secure_delete=ON")
                 self._db.execute("PRAGMA foreign_keys=ON")
-                self._create_schema()
-                self._migrate()
+                # Schema DDL and revision marker commit atomically. Serialize
+                # first-open migrations across processes before checking version.
+                with self._transaction():
+                    self._create_schema()
+                    self._migrate()
         except BaseException:
             self._db.close()  # No filtrar descriptores si falla el inicio o migracion.
             raise
 
+    def _configure_wal(self) -> None:
+        # The first journal-mode switch may report SQLITE_BUSY even when the
+        # connection busy timeout is set. Retry only this idempotent PRAGMA,
+        # never replay application writes or failed migrations.
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                self._db.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+                if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.01)
+
+    @contextmanager
+    def _transaction(self):
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
+
     def _create_schema(self) -> None:
-        with self._db:
-            self._db.executescript("""
+        # executescript() would commit an outer transaction; execute complete
+        # statements individually, including complete CREATE TRIGGER bodies.
+        new_fts = self._db.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='memory_fts'"
+        ).fetchone() is None
+        schema = """
                 CREATE TABLE IF NOT EXISTS memories (
                     row_id INTEGER PRIMARY KEY,
                     uid TEXT NOT NULL UNIQUE,
@@ -197,7 +216,16 @@ class MemoryStore:
                     INSERT INTO memory_fts(rowid, title, body, tags_json)
                     VALUES(new.row_id, new.title, new.body, new.tags_json);
                 END;
-            """)
+            """
+        statement = ""
+        for line in schema.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                self._db.execute(statement)
+                statement = ""
+        if new_fts:
+            self._db.execute("INSERT INTO memory_fts(memory_fts) VALUES('rebuild')")
+
 
     def _migrate(self) -> None:
         """Actualizacion no destructiva v0.1 (user_version=0) -> v0.2.
@@ -209,25 +237,26 @@ class MemoryStore:
         if version > SCHEMA_VERSION:
             raise RuntimeError(f"Base version {version} mas nueva que el codigo {SCHEMA_VERSION}")
         if version < 2:
-            with self._db:
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(memories)")}
+            if "revision" not in columns:
                 self._db.execute("ALTER TABLE memories ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
-                self._db.execute("""
-                    CREATE TABLE IF NOT EXISTS memory_events (
-                        event_id INTEGER PRIMARY KEY,
-                        uid TEXT NOT NULL,
-                        space TEXT NOT NULL,
-                        project TEXT NOT NULL,
-                        action TEXT NOT NULL CHECK(action IN ('create','update','delete')),
-                        revision INTEGER NOT NULL,
-                        actor TEXT NOT NULL,
-                        occurred_ms INTEGER NOT NULL
-                    )
-                """)
-                self._db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_memory_events_scope
-                    ON memory_events(space, project, uid, event_id)
-                """)
-                self._db.execute("PRAGMA user_version=2")
+            self._db.execute("""
+                CREATE TABLE IF NOT EXISTS memory_events (
+                    event_id INTEGER PRIMARY KEY,
+                    uid TEXT NOT NULL,
+                    space TEXT NOT NULL,
+                    project TEXT NOT NULL,
+                    action TEXT NOT NULL CHECK(action IN ('create','update','delete')),
+                    revision INTEGER NOT NULL,
+                    actor TEXT NOT NULL,
+                    occurred_ms INTEGER NOT NULL
+                )
+            """)
+            self._db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memory_events_scope
+                ON memory_events(space, project, uid, event_id)
+            """)
+            self._db.execute("PRAGMA user_version=2")
 
     def _audit(self, uid: str, action: str, revision: int) -> None:
         self._db.execute("""
@@ -290,7 +319,7 @@ class MemoryStore:
         now = _now_ms()
         fingerprint = self._fingerprint(kind, title, body)
         uid = str(uuid4())
-        with self._lock, self._db:
+        with self._transaction():
             # Una expiracion no impide volver a guardar explicitamente el mismo dato.
             self._db.execute("""
                 DELETE FROM memories WHERE space=? AND project=? AND fingerprint=?
@@ -330,8 +359,13 @@ class MemoryStore:
         uid = _text(uid, "id", 100)
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected_revision debe ser un entero positivo")
-        with self._lock, self._db:
-            current = self.get(uid)
+        with self._transaction():
+            # Expiry hides a record from retrieval, not from explicit erasure.
+            row = self._db.execute(
+                "SELECT * FROM memories WHERE uid=? AND space=? AND project=?",
+                (uid, self.space, self.project),
+            ).fetchone()
+            current = _public(row) if row is not None else None
             if current is None:
                 return False
             if expected_revision is not None and current["revision"] != expected_revision:
@@ -364,7 +398,7 @@ class MemoryStore:
             raise ValueError("importance debe estar entre 1 y 5")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected_revision debe ser un entero positivo")
-        with self._lock, self._db:
+        with self._transaction():
             current = self.get(uid)
             if current is None:
                 return None
@@ -423,7 +457,7 @@ class MemoryStore:
                 WHERE memory_fts MATCH ?
                   AND m.space=? AND m.project=?
                   AND (m.expires_ms IS NULL OR m.expires_ms > ?)
-                ORDER BY lexical_rank ASC
+                ORDER BY lexical_rank ASC, m.row_id ASC
                 LIMIT ?
             """, (match, self.space, self.project, now, max(40, limit * 5))).fetchall()
         candidates = []
@@ -464,14 +498,29 @@ class MemoryStore:
         }
 
     def backup(self, destination: str | Path) -> str:
+        """Create a consistent, private, non-overwriting backup of the whole DB.
+
+        This is a trusted local administrator operation, NOT a per-project
+        export. It is deliberately never exposed by the client broker or MCP.
+        """
         dest = Path(destination).expanduser()
         if dest.resolve() == self.path.resolve():
             raise ValueError("El destino del respaldo debe ser diferente de la base de datos")
-        if dest.exists():
-            raise ValueError("El destino del respaldo ya existe; elija otra ruta")
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, sqlite3.connect(dest) as target:
-            self._db.backup(target)
-        if os.name == "posix":
-            os.chmod(dest, 0o600)
+        dest = reserve_private(dest, exclusive=True)
+        identity = dest.stat()
+        try:
+            with self._lock, closing(sqlite3.connect(dest)) as target:
+                target.execute("PRAGMA synchronous=FULL")
+                self._db.backup(target)
+                if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise RuntimeError("Backup integrity check failed")
+        except BaseException:
+            # Do not remove a destination replaced by another process.
+            try:
+                now = dest.lstat()
+                if (now.st_dev, now.st_ino) == (identity.st_dev, identity.st_ino):
+                    dest.unlink()
+            except FileNotFoundError:
+                pass
+            raise
         return str(dest)

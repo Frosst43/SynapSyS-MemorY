@@ -1,3 +1,4 @@
+from contextlib import closing
 """Validaciones v0.2 sin dependencias externas ni sesiones reales de agentes."""
 
 import os
@@ -47,7 +48,7 @@ class V02Tests(unittest.TestCase):
             return make_server(self.store, policy)
 
     def test_schema_version_and_integrity(self):
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
         self.assertEqual(SCHEMA_VERSION, version)
         self.assertTrue(self.store.check_integrity())
@@ -55,7 +56,7 @@ class V02Tests(unittest.TestCase):
     def test_migration_from_v01_keeps_memories(self):
         original = self.store.remember("Decision inicial persistida")["memory"]["id"]
         self.store.close()
-        with sqlite3.connect(self.path) as conn:
+        with closing(sqlite3.connect(self.path)) as conn, conn:
             conn.execute("DROP TABLE memory_events")
             conn.execute("ALTER TABLE memories DROP COLUMN revision")
             conn.execute("PRAGMA user_version=0")
@@ -63,6 +64,7 @@ class V02Tests(unittest.TestCase):
             self.assertEqual(original, upgraded.recall("persistida")[0]["id"])
             self.assertEqual(1, upgraded.get(original)["revision"])
             self.assertTrue(upgraded.check_integrity())
+
 
     def test_audit_does_not_resurrect_deleted_content(self):
         saved = self.store.remember("Contenido reservado de la prueba")
@@ -134,11 +136,12 @@ class V02Tests(unittest.TestCase):
 
     def test_future_schema_rejected_before_any_migration(self):
         future = Path(self.tmp.name) / "future.sqlite3"
-        with sqlite3.connect(future) as conn:
+        with closing(sqlite3.connect(future)) as conn, conn:
             conn.execute("PRAGMA user_version=900")
+        future.chmod(0o600)  # A valid private fixture reaches the version check.
         with self.assertRaises(RuntimeError):
             MemoryStore(future, space="shared", project="syptest")
-        with sqlite3.connect(future) as conn:
+        with closing(sqlite3.connect(future)) as conn, conn:
             self.assertEqual(900, conn.execute("PRAGMA user_version").fetchone()[0])
             self.assertEqual([], conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall())
 

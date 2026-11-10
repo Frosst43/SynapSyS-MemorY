@@ -11,19 +11,13 @@ _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,512}")
 
 
 def read_token_file(file: str | Path) -> str:
-    path = Path(file)
-    if not path.is_absolute() or path.is_symlink():
+    from .secureio import read_private
+    if not Path(file).is_absolute():
         raise ValueError("Ruta de token invalida")
     try:
-        real = path.resolve(strict=True)
-        st = path.stat()
-    except OSError as exc:
-        raise ValueError("Token inaccesible") from exc
-    if real != path or not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or stat.S_IMODE(st.st_mode) & 0o077:
-        raise ValueError("Token no protegido por el sistema de archivos")
-    if st.st_size > 1024:
-        raise ValueError("Tamano de token incorrecto")
-    value = path.read_text(encoding="ascii").strip()
+        value = read_private(file, limit=1024).decode("ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("Token inaccesible o invalido") from exc
     if not _TOKEN.fullmatch(value):
         raise ValueError("Formato de token invalido")
     return value
