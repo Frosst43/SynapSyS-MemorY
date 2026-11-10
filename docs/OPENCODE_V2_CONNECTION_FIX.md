@@ -1,66 +1,69 @@
-# OpenCode V2: connection-only probe (2026-11-10)
+# OpenCode 2.2.5: connection remains unconfirmed
 
-Status: experimental; no inference, no new stable-release claim.
-This probe supersedes the OpenCode configuration phase of
-`scripts/pilot_opencode_managed.py`. It does not repeat its A->B lifecycle test.
+Updated 2026-11-10. This document corrects the earlier diagnosis.
 
-## Evidence and diagnosis
+## Evidence supplied by the owner
 
-The owner reported OpenCode 2.2.5, a successful A->B lifecycle check and the
-single OpenCode log line `No MCP servers configured`. That line is NOT proof
-of a broken memory engine or an inference attempt. In upstream v2.2.5,
-`mcp list` prints it when the returned server list is empty.
+The original lifecycle A->B test passed. Both OpenCode probes returned
+`No MCP servers configured`. For the c2abf86 probe the owner supplied:
 
-The old pilot used `OPENCODE_CONFIG=/workspace/opencode.json` and put only
-update/share settings in the managed file. Official V2 documentation says
-legacy OPENCODE_* configuration environment variables are ignored. This is
-a confirmed incompatibility in the old pilot, but the log alone does not
-prove why workspace discovery also yielded no servers.
+- opencode_exit_code: 0
+- broker_profiles_before_client: 1 (trusted launcher preflight)
+- broker_profiles_from_client: 0
+- sandbox_closed: true
+- token_revoked: true
 
-The targeted probe removes that ambiguity: the FULL V2 `mcp.servers` config
-is mounted read-only at `/etc/opencode/opencode.json` INSIDE the sandbox.
-Upstream discovery explicitly loads that directory on Linux. Nothing is
-written to the host /etc or the owner's ordinary OpenCode settings.
+This proves no successful profile request arrived from the client. It does
+NOT prove why the server list is empty. `CONFIG_NOT_LOADED` is our old
+classification label, not an OpenCode diagnostic or a confirmed root cause.
 
-## Boundaries
+## Correction to the earlier explanation
 
-- Executes only `opencode mcp list`, no chat/run/model command.
-- No calls to Ollama and no downloads or installations.
-- Keeps network namespace isolation, private HOME, scoped broker and supervised closure.
-- Mounts only the explicit binary, Python venv, module source, data socket and token.
-- No whole HOME, SQLite, admin socket or administrative credential is mounted.
-- The broker grants READ only, for a new synthetic project and temporary database.
-- No lifecycle PASS is invented: the new summary reports lifecycle NOT_RUN.
-- Success requires exit 0, the exact server marked connected AND a new broker
-  profile request from the client, excluding the launcher's own preflight.
-- Failure records an exit code and a diagnostic; a zero exit alone is not PASS.
+The assertion that OpenCode V2 ignores OPENCODE_CONFIG was too broad and is
+incorrect for the examined v2.2.5 source: packages/cli/src/server-process.ts
+forwards OPENCODE_CONFIG as config.file. The historical commit message and
+comment in probe_opencode_mcp.py should NOT be treated as a verified cause.
+Changing only the managed config location did not resolve the owner's run.
+No new configuration-path fix is claimed here.
 
-## Run once from the existing repository venv
+## Targeted diagnostic, not another blind configuration change
 
-```bash
-PYTHONPATH=src .venv/bin/python scripts/probe_opencode_mcp.py \
-  --opencode "$HOME/.opencode/bin/opencode"
-```
+Run `scripts/diagnose_opencode_config.py` with the existing venv. It reuses the
+same managed configuration and runtime mount list as the previous probe.
+Inside a fresh Bubblewrap namespace it:
 
-Temporary evidence directory: `symem-opencode-only-*`, outside the repo.
-Expected success line (not a result already obtained on the owner's machine):
+1. Reads the mounted config and verifies its SHA-256 against the host fixture.
+2. Checks importability of the already installed MCP and MemorY Python modules.
+3. Runs the installed OpenCode binary with --version, then --standalone
+   --print-logs debug config, then --standalone --print-logs mcp list.
+4. Captures configuration source paths and recognized MCP server names,
+   plus relevant server warnings. Raw transient output is private; known
+   fixture secrets and opaque credential-like values are redacted in retained logs.
+5. Closes the namespace, revokes its read-only fixture grant and prints the
+   diagnostic summary directly, so a second cat command is not normally needed.
 
-```text
-PASS: OpenCode real conectado a MemorY por MCP dentro de Bubblewrap
-```
+Standalone uses a private OpenCode service, not the background service mode
+of the earlier probe. This is an explicit diagnostic variable, not proof that
+the previous run contacted a host service. Host HOME/state remain unmounted.
+Network namespace isolation stays enabled. No model, prompt, Ollama call,
+download, installation, host configuration or real repository is used.
+The A->B lifecycle test is NOT repeated. No change to core memory/controller.
 
-## Verification of this change
+`CONNECTED_IN_STANDALONE_DIAGNOSTIC` requires matching mounted config,
+a working Python runtime, the server present in OpenCode's reported config,
+a connected label from mcp list, actual broker profile activity from the
+client and successful supervised closure/revocation. It is not v1 certification
+or evidence of inference. Other outcomes identify the failed diagnostic stage.
 
-15 focused configuration/argument/evidence unit tests PASS locally, once.
-These do not execute OpenCode, Bubblewrap or a model. Native OpenCode end-to-end
-connection remains unconfirmed until the owner executes the new probe.
-Core memory, permissions, lifecycle controller, main and rc1 remain unchanged.
+17 new pure helper tests PASS locally (command allowlist, classifications,
+config filtering and redaction). They do NOT execute OpenCode or Bubblewrap.
+Native diagnostics remain pending on the owner's machine.
 
-## Primary sources
+## Version-pinned primary sources
 
-- https://opencode.ai/docs/config/
-- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/commands/handlers/mcp/list.ts
+- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/commands/commands.ts
+- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/commands/handlers/debug/config.ts
+- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/services/standalone.ts
+- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/cli/src/server-process.ts
 - https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/config/discovery.ts
-- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/config.ts
-- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/schema/src/config/mcp.ts
-- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/schema/src/mcp.ts
+- https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/config/normalize.ts
