@@ -1,155 +1,94 @@
 # SynapSyS-MemorY
 
-**Motor persistente e independiente de memoria para conectar OpenCode, Codex, OpenClaw y proyectos propios.**
+**Memoria local independiente y sin IA interna, para distintos clientes y proyectos.**
 
-No incluye inteligencia artificial, embeddings, modelos, Ollama, nube ni GPU.
-El motor es determinista: guarda y busca datos que sus aplicaciones cliente entregan.
+## Estado: 1.0.0-rc1, NO estable
 
-## Estado
+Esta candidata corrige fallos reproducidos sobre `1350b71` (dev5). No se ha
+fusionado en `main` ni se ha certificado una integracion con un agente real.
+El aislamiento de memoria NO revoca por si solo los permisos de archivos de
+un proceso ya lanzado. El cierre coordinado del sandbox al cambiar de
+proyecto sigue siendo un bloqueo de salida.
 
-- **v0.2.0.dev5 — experimental**: pruebas unitarias locales y de adaptador. No es una versión lista para conectar a datos privados reales.
-- **SQLite + FTS5/BM25**: búsqueda local y almacenamiento persistente.
-- **MCP stdio**: protocolo validado en Kubuntu (09/11/2026) con tres procesos de prueba; OpenCode, Codex y OpenClaw reales siguen pendientes.
-- **Política por proceso MCP**: herramientas de lectura, escritura y borrado separadas.
-- **Versiones y concurrencia**: correcciones y borrados con `expected_revision` para evitar sobrescrituras silenciosas.
-- **Auditoría ligera**: acción, versión, fecha y actor, sin recuperar texto borrado.
-- **Migración de v0.1**: conservadora, mediante `PRAGMA user_version=2`.
+No incluye LLM, embeddings, Ollama, inferencia ni GPU. La memoria no decide
+que es verdad: guarda y consulta datos suministrados por clientes autorizados.
 
-### Aviso importante de permisos
+## Incluido
 
-Estos permisos restringen las herramientas expuestas por cada proceso MCP; **no son autenticación fuerte**. Cualquier proceso con permisos del sistema operativo para leer el archivo SQLite podría ignorar esos filtros. Para conectar usuarios no confiables o equipos distintos se necesitará un servicio intermediario autenticado y una configuración de permisos de archivos apropiada. **No exponer directamente la base ni MCP stdio en Internet**.
+- SQLite local con FTS5/BM25, transacciones, revisiones optimistas y TTL.
+- Broker Unix con tokens por sesion/proyecto y UID real del proceso cliente.
+- Adaptador MCP stdio opcional, CLI y API Python. Sin servidor HTTP publico.
+- Concesiones revocables y limites de sesiones, conexiones y handlers.
+- Migraciones atomicas, backups privados y consistentes, auditoria sin cuerpos.
+- Lanzador Bubblewrap experimental con red desactivada y un unico workspace.
+- Rechazo de directorios solapados, hardlinks, archivos especiales y politicas ambiguas.
 
-## Instalación local
+## Datos privados frente al codigo publicado
 
-Python 3.11+ con soporte SQLite FTS5:
+GitHub aloja codigo, pruebas sinteticas y documentacion; no los recuerdos.
+El broker guarda por defecto en `~/.local/state/synapsys-memory/memory.sqlite3`.
+La CLI directa conserva su ruta heredada en
+`~/.local/share/synapsys-memory/memory.sqlite3`; no son la misma base salvo
+configuracion explicita. La integracion de agentes debe utilizar el broker,
+no abrir SQLite directamente.
+
+Manten las bases, tokens y backups fuera del checkout. `.gitignore` es una
+precaucion, no una frontera de seguridad. Un cliente externo puede enviar al
+proveedor de su modelo el texto que recupere: el almacenamiento local por si
+solo no garantiza que todo el procesamiento del cliente sea local.
+
+## Instalacion y validacion local
+
+Python 3.11+ y SQLite con FTS5. Broker/sandbox: Linux recomendado y probado.
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+.venv/bin/python -m pip install -e '.[mcp]'
+.venv/bin/python scripts/validate_release.py
 ```
 
-Para el protocolo MCP (dependencia de protocolo, no una IA):
+El validador ejecuta una vez la suite y las pruebas MCP y Bubblewrap+broker,
+con bases temporales. No instala dependencias, no ejecuta sudo, no arranca
+modelos ni toca repositorios reales. Escribe evidencias en una carpeta
+privada temporal fuera del repositorio. Un requisito ausente se informa como
+BLOCKED, nunca como PASS. Aunque los componentes pasen, muestra los gates
+manuales pendientes y no certifica una version estable.
 
-```bash
-python -m pip install -e '.[mcp]'
-```
+## Seguridad y limites de uso
 
-## Ejemplo básico por CLI
+Usa un controlador de confianza, credenciales privadas y separacion OS del
+broker y agentes. No concedas al agente acceso directo a SQLite, al socket
+admin, al secreto administrativo ni al archivo de politica.
 
-```bash
-synapsys-memory --space compartido --project demo remember 'Bloques de cuatro minutos' --kind decision --title 'Consenso'
-synapsys-memory --space compartido --project demo recall 'consenso bloques'
-synapsys-memory --space compartido --project demo stats
-synapsys-memory --space compartido --project demo check
-```
+Un proyecto por sesion. El proyecto se obtiene de la concesion del broker,
+no de parametros elegidos por el agente. Los nombres de proyectos no tienen
+privilegios especiales. La colaboracion padre/hijo sigue aplazada.
 
-Ruta por defecto: `~/.local/share/synapsys-memory/memory.sqlite3`. Se puede modificar con `SYMEM_DB` o `--db`. La base y sus respaldos quedan fuera de Git.
+Las comprobaciones de rutas y enlaces son un preflight, no una defensa
+contra un proceso no aislado del mismo UID que cambie el host concurrentemente.
+Bubblewrap no es por si solo un producto de seguridad completo. La red
+bloqueada impide conectarse directamente al Ollama del host; no desactives el
+ aislamiento para eludirlo. Falta integrar un acceso explicitamente autorizado.
 
-Para modificar desde la CLI se puede utilizar `--expected-revision N` tras `update` o `forget`. Los clientes MCP deben enviar obligatoriamente una revisión esperada para esas operaciones.
+`backup` es una operacion de administrador que incluye TODA la base, no una
+exportacion por proyecto. No se expone a herramientas MCP ni clientes del
+broker. El borrado activo no elimina backups externos ni garantiza borrado
+forense. Las migraciones no proporcionan downgrade automatico.
 
-## Conectar dos aplicaciones al mismo proyecto (en preparacion)
+## Resultado de la auditoria local
 
-El adaptador MCP actual exige `SYMEM_BROKER_SOCKET` y `SYMEM_SESSION_TOKEN` emitido por un administrador confiable. No basta configurar `SYMEM_DB`, `SYMEM_SPACE` y `SYMEM_PROJECT`: el acceso SQLite directo queda **desactivado por defecto**.
+139/139 pruebas unitarias y de sockets PASS; prueba con dos UIDs Linux reales
+PASS. Las pruebas MCP y Bubblewrap de dev5 pasaron en el equipo del propietario;
+la revision rc1 debe volver a validar esas integraciones. En el entorno de
+esta auditoria no estan disponibles el SDK MCP ni Bubblewrap.
 
-Los permisos y el proyecto se asignan mediante concesiones del broker, no desde la IA. No guardar tokens reales en repositorios, archivos de configuración compartidos ni prompts. Los clientes con el mismo UID de Linux **no** quedan aislados mediante este mecanismo por sí solo.
+La medicion sintetica local con 10.000 recuerdos y 200 consultas dio p50
+11,384 ms y p95 13,055 ms, sin contar MCP ni un cliente de IA. No es una promesa
+para otro equipo o corpus. Ver [auditoria y gates](docs/V1_AUDIT.md).
 
-Las configuraciones de cliente deben utilizar un lanzador confiable con sandbox. La integración con clientes reales está pendiente.
+Los [fragmentos de conectores](examples/README.md) no equivalen a integraciones
+validadas ni conceden permisos por si mismos.
 
-Referencias: [OpenCode](examples/opencode-v1.json), [Codex](examples/codex.toml), [OpenClaw](examples/openclaw.md). Las rutas deben adaptarse a la instalación. La incorporación a los clientes no está ejecutada.
-
-## Pruebas
-
-Sin bibliotecas externas:
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-PYTHONPATH=src python3 bench/benchmark.py --entries 10000 --queries 200
-```
-
-Prueba **real de protocolo MCP stdio** con tres procesos en una base temporal (requiere el extra MCP):
-
-```bash
-python3 scripts/verify_mcp_stdio.py
-```
-
-La prueba verifica que un cliente escribe, otro de solo lectura recupera el dato y un tercero de otro proyecto no lo ve. **No prueba todavía OpenCode, Codex ni OpenClaw reales**.
-
-## Lo que sigue pendiente
-
-- Validar handshake y herramientas MCP en un entorno con SDK instalado.
-- Integración verificada con versiones reales de OpenCode, Codex y OpenClaw.
-- Broker autenticado y permisos sólidos para procesos que no compartan confianza.
-- Versionado de contenido completo, restauración y exportaciones; solo tenemos auditoría de acciones.
-- Pruebas de concurrencia más exigentes y evaluación de rendimiento en hardware de destino.
-
-[Arquitectura multicliente](docs/MULTI_CLIENT_ARCHITECTURE.md) · [Hoja de ruta sin IA](docs/ROADMAP_MEMORY_INTELLIGENCE.md) · [Alcance de v0.2](docs/V02_SECURITY_AND_TESTS.md)
-
-## Endurecimiento experimental (dev3)
-
-El broker vincula cada token al UID real del proceso cliente (identidad del kernel Unix), comprueba permisos de archivos y sockets antes de arrancar y crea SQLite con permisos 0600 desde el inicio. Para despliegue con diferentes cuentas Linux existen `--peer-uid` (grant/switch) y `--client-gid` (serve). Esto **no sustituye** un sandbox de archivos por proyecto ni autoriza a un agente a decidir sus propios permisos.
-
-Ver [guía de aislamiento OS](docs/V02_OS_ISOLATION.md).
-
-## Sandbox universal por proyecto (dev4, experimental)
-
-Nuevo lanzador opcional **`synapsys-memory-sandbox`** para Linux,
-con una política privada de proyectos que asigna un único directorio
-de trabajo a cada proceso. Usa **Bubblewrap** para montar solo ese
-workspace y las librerías básicas del sistema en lectura, sin
-montar el HOME completo ni los otros repositorios y con red desactivada
-por defecto. El lanzador **no tiene ninguna excepción por nombre**:
-todos los proyectos presentes y futuros siguen las mismas reglas.
-
-- Rechaza proyectos no registrados, políticas inseguras, rutas demasiado
-  amplias, enlaces simbólicos de raíz y submontajes.
-- Falla sin ejecutar el agente si falta bwrap o su lanzamiento falla.
-- No convierte automáticamente a una IA ya ejecutada sin límites en
-  una IA aislada: es obligatorio lanzarla **desde el principio** dentro
-  del sandbox.
-- El broker de memoria y el sandbox de archivos son componentes
-  separados. Sigue pendiente conectar su socket de datos y credenciales
-  de modo seguro, sin exponer el socket administrador.
-- **Probado:** 20 tests del nuevo lanzador; regresión de dev2+dev4
-  65/65 en una copia local. **Validado en Kubuntu:** aislamiento real básico mediante
-  bwrap, con proyecto A escribible y proyecto B invisible (09/11/2026).
-  **Pendiente:** agentes reales, puente conjunto sandbox+broker,
-  aislamiento multi-UID de producción y regresión completa.
-
-Prueba real, aislada de repositorios del usuario:
-
-```bash
-PYTHONPATH=src python3 scripts/verify_sandbox_bwrap.py
-```
-
-Esta prueba devuelve error de forma explícita si no puede ejecutar
-Bubblewrap. No fusionar a `main` sin validaciones físicas y de
-integración. Ver [documentación del sandbox](docs/V02_SANDBOX_UNIVERSAL.md).
-
-## Puente opcional sandbox + broker (dev5 experimental)
-
-La política del sandbox puede incluir `memory` con el socket Unix de
-**datos**, un archivo privado de token de sesión y el espacio autorizado.
-El lanzador valida que el token corresponda al proyecto y espacio exactos,
-monta únicamente esos dos objetos y no expone SQLite ni el socket admin.
-El adaptador MCP admite `SYMEM_SESSION_TOKEN_FILE` para leer un token
-montado de solo lectura sin colocarlo en `argv`.
-
-El 09/11/2026 la prueba física de **Bubblewrap aislado** terminó PASS
-en Kubuntu, además de la prueba **MCP stdio** realizada previamente.
-La combinación de ambas piezas necesita una última prueba real:
-
-```bash
-cd ~/Documentos/SynapSyS-MemorY
-git pull --ff-only
-PYTHONPATH=src .venv/bin/python scripts/verify_sandbox_broker_bridge.py
-```
-
-El script usa exclusivamente proyectos y una base temporal; **no toca
-SynapSyS Mobile, SynapSyS ni SYPcoin**. Si falla, no activa un modo sin
-sandbox. No conectar agentes a repositorios reales sin verificar ese paso
-y el aislamiento de sus procesos y credenciales.
-
-[Puente sandbox y broker](docs/V02_SANDBOX_BROKER_BRIDGE.md) ·
-[Resultado Bubblewrap Kubuntu](docs/VALIDACION_SANDBOX_KUBUNTU_2026-11-09.md) ·
-[Resultado MCP Kubuntu](docs/VALIDACION_MCP_KUBUNTU_2026-11-09.md).
+Los documentos `V02_*` son historicos; este README y `V1_AUDIT.md` describen
+el alcance actual. El repositorio publico no cambia la licencia propietaria
+ya declarada en `pyproject.toml`; no se ha elegido una licencia nueva.

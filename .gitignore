@@ -14,3 +14,13 @@ build/
 *.bak
 .coverage
 .env
+
+# Runtime credentials and backups must stay outside Git.
+*.token
+*.sock
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.symem-runtime/
+private/
+backups/

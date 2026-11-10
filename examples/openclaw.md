@@ -1,34 +1,18 @@
-# OpenClaw — Conectar SynapSyS-MemorY
+# OpenClaw: integracion real pendiente
 
-No sustituir automáticamente la memoria nativa de OpenClaw; el objetivo
-es compartir proyectos entre varios clientes, con permisos explícitos.
+Ver [contrato de los ejemplos](README.md). No sustituir automaticamente la
+memoria nativa del cliente ni importar conversaciones sin autorizacion.
 
-La documentación actual de OpenClaw admite servidores externos en
-`mcp.servers` con transporte `stdio` y configuración mediante UI/CLI.
-Para una instalación real, revisar la versión instalada antes de registrar.
+El adaptador de SynapSyS-MemorY se ejecuta mediante stdio:
 
-## Preparación
+- Comando: ruta absoluta al runtime autorizado `synapsys-memory-mcp`.
+- `SYMEM_BROKER_SOCKET`: socket Unix de datos, nunca el socket admin.
+- `SYMEM_SESSION_TOKEN_FILE`: archivo privado de una concesion de proyecto.
 
-```bash
-cd /RUTA/AL/REPO
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[mcp]'
-```
+El proyecto, derechos y UID se deciden en el broker. Las variables de entorno
+`SYMEM_PROJECT` o `SYMEM_RIGHTS` no los amplian. Configurar el transporte segun
+la documentacion de la version de OpenClaw realmente instalada; esta revision
+no ha probado la aplicacion real ni habilita captura automatica.
 
-En la configuración MCP de OpenClaw, añadir servidor de tipo `stdio`:
-
-- Comando: `/RUTA/AL/REPO/.venv/bin/synapsys-memory-mcp`
-- Entorno: `SYMEM_DB=/RUTA/PRIVADA/memory.sqlite3`
-- Entorno: `SYMEM_SPACE=shared`
-- Entorno: `SYMEM_PROJECT=demo`
-- Entorno: `SYMEM_CLIENT=openclaw`
-- Entorno: `SYMEM_RIGHTS=read`
-
-La base de datos y proyecto deben ser los mismos que los de OpenCode y Codex
-para compartir datos; los derechos pueden ser distintos. Configurar
-separadamente cada cliente. No utilizar rutas relativas en producción.
-
-Una vez guardado, revisar con `openclaw mcp doctor <nombre> --probe`.
-No se ha instalado ni validado OpenClaw real en este entorno.
-
-Referencia oficial: https://docs.openclaw.ai/tools/mcp
+No introducir la clave administrativa en la configuracion del agente. El
+launcher/sandbox y acceso al modelo son gates pendientes para v1 estable.

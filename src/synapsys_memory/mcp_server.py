@@ -40,8 +40,9 @@ def make_server(store: MemoryStore, policy: ConnectorPolicy | None = None):
             saved = store.remember(body, title=title, kind=kind, importance=importance,
                                    tags=tags, source=f"mcp:{policy.client}", ttl_days=ttl_days)
             if not policy.permits("read"):
-                return {"created": saved["created"], "id": saved["memory"]["id"],
-                        "revision": saved["memory"]["revision"]}
+                record = saved.get("memory", saved)
+                return {"created": saved["created"], "id": record["id"],
+                        "revision": record["revision"]}
             return saved
 
         @server.tool()

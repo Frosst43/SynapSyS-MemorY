@@ -15,6 +15,7 @@ from pathlib import Path
 import secrets
 import socket
 import socketserver
+import sqlite3
 import stat
 import struct
 import threading
@@ -22,15 +23,35 @@ import time
 from typing import Any
 
 from .policy import ConnectorPolicy
+from .secureio import strict_json_loads
 from .store import MemoryStore, MemoryConflictError, _scope
 
 MAX_MESSAGE = 128 * 1024
 MAX_RESPONSE = 1024 * 1024
+MAX_SESSIONS = 1024
+MAX_STORES = 32
+MAX_HANDLERS = 32
 RIGHTS_BY_ACTION = {
     "remember": "write", "update": "write", "forget": "delete",
     "recall": "read", "recent": "read", "get": "read",
     "stats": "read", "audit": "read",
 }
+
+
+ALLOWED_ARGS = {
+    "profile": set(), "stats": set(),
+    "remember": {"body", "title", "kind", "importance", "tags", "ttl_days"},
+    "recall": {"query", "limit", "max_chars"}, "recent": {"limit", "kind"},
+    "get": {"id"}, "audit": {"id", "limit"},
+    "update": {"id", "body", "title", "expected_revision", "importance", "tags"},
+    "forget": {"id", "expected_revision"},
+}
+
+
+def _expired(grant: dict) -> bool:
+    # A wall-clock rollback cannot extend a grant. Wall-clock forward jumps
+    # may shorten its life, which is conservative for authorization.
+    return time.monotonic() >= grant["deadline"] or time.time() >= grant["expires_at"]
 
 
 class BrokerError(RuntimeError):
@@ -55,7 +76,7 @@ def request(socket_path: str | Path, data: dict[str, Any], *, timeout: float = 3
             if len(chunks) > MAX_RESPONSE:
                 raise BrokerError("Respuesta demasiado grande")
     try:
-        response = json.loads(chunks)
+        response = strict_json_loads(chunks)
     except (ValueError, UnicodeError) as exc:
         raise BrokerError("Respuesta no valida") from exc
     if not isinstance(response, dict) or "ok" not in response:
@@ -152,7 +173,25 @@ class _Server(socketserver.ThreadingUnixStreamServer):
     def __init__(self, path: str, handler: type, broker: "BrokerDaemon", admin: bool):
         self.broker = broker
         self.admin = admin
+        self._slots = threading.BoundedSemaphore(MAX_HANDLERS)
         super().__init__(path, handler)
+
+
+    def process_request(self, request, address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, address):
+        try:
+            super().process_request_thread(request, address)
+        finally:
+            self._slots.release()
 
 
 class _Handler(socketserver.StreamRequestHandler):
@@ -163,7 +202,7 @@ class _Handler(socketserver.StreamRequestHandler):
             raw = self.rfile.readline(MAX_MESSAGE + 1)
             if not raw.endswith(b"\n") or len(raw) > MAX_MESSAGE:
                 raise ValueError("Solicitud incompleta o demasiado grande")
-            message = json.loads(raw)
+            message = strict_json_loads(raw)
             if not isinstance(message, dict):
                 raise ValueError("La solicitud debe ser un objeto")
             peer_uid = _peer_uid(self.connection)
@@ -181,7 +220,7 @@ class _Handler(socketserver.StreamRequestHandler):
             response = {"ok": False, "error": "conflict", "message": "Revision obsoleta"}
         except (ValueError, TypeError, KeyError, json.JSONDecodeError):
             response = {"ok": False, "error": "validation", "message": "Solicitud no valida"}
-        except (OSError, RuntimeError):
+        except (OSError, RuntimeError, sqlite3.Error):
             response = {"ok": False, "error": "server", "message": "Error interno del servidor"}
         result = (json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n").encode()
         if len(result) > MAX_RESPONSE:
@@ -217,6 +256,10 @@ class BrokerDaemon:
         self._admin_hash = hashlib.sha256(admin_key.encode()).digest()
         self._lock = threading.RLock()
         self._sessions: dict[str, dict] = {}
+        self._tokens: dict[bytes, str] = {}
+        self._owned_sockets: dict[Path, tuple[int, int]] = {}
+        self._serving: set[_Server] = set()
+        self._stopping = False
         self._stores: dict[tuple[str, str, str], MemoryStore] = {}
         self._servers: list[_Server] = []
         self._threads: list[threading.Thread] = []
@@ -224,6 +267,7 @@ class BrokerDaemon:
     def start(self) -> None:
         if self._servers:
             raise RuntimeError("Broker ya iniciado")
+        self._stopping = False
         paths = [self.client_socket, self.admin_socket]
         for p in paths:
             if p.exists() or p.is_symlink():
@@ -256,37 +300,56 @@ class BrokerDaemon:
         try:
             for path, is_admin in ((self.client_socket, False), (self.admin_socket, True)):
                 server = _Server(str(path), _Handler, self, is_admin)
+                self._servers.append(server)
+                st = path.lstat()
+                self._owned_sockets[path] = (st.st_dev, st.st_ino)
                 if not is_admin and self.client_gid is not None:
                     os.chown(path, -1, self.client_gid)
                     os.chmod(path, 0o660)
                 else:
                     os.chmod(path, 0o600)
-                self._servers.append(server)
             for server in self._servers:
-                th = threading.Thread(target=server.serve_forever, name="symem-broker", daemon=True)
+                th = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05},
+                                      name="symem-broker", daemon=True)
                 th.start()
+                self._serving.add(server)
                 self._threads.append(th)
         except BaseException:
             self.stop()
             raise
 
     def stop(self) -> None:
+        with self._lock:
+            self._stopping = True
         for server in self._servers:
-            if self._threads:
+            if server in self._serving:
                 server.shutdown()
             server.server_close()
         self._servers.clear()
+        self._serving.clear()
         for th in self._threads:
             th.join(timeout=3)
         self._threads.clear()
-        for path in (self.client_socket, self.admin_socket):
-            if path.is_socket():
-                path.unlink()
+        for path, identity in self._owned_sockets.items():
+            try:
+                st = path.lstat()
+                if stat.S_ISSOCK(st.st_mode) and (st.st_dev, st.st_ino) == identity:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+        self._owned_sockets.clear()
         with self._lock:
             for store in self._stores.values():
                 store.close()
             self._stores.clear()
             self._sessions.clear()
+            self._tokens.clear()
+
+    def _prune_sessions(self) -> None:
+        for session, grant in list(self._sessions.items()):
+            if _expired(grant):
+                self._tokens.pop(grant["token_hash"], None)
+                del self._sessions[session]
 
     def __enter__(self) -> "BrokerDaemon":
         self.start()
@@ -307,14 +370,22 @@ class BrokerDaemon:
             peer_uid = os.geteuid()
         if type(peer_uid) is not int or not 0 <= peer_uid <= 2**32 - 1:
             raise ValueError("peer_uid debe ser UID valido del proceso cliente")
+        self._prune_sessions()
+        if session not in self._sessions and len(self._sessions) >= MAX_SESSIONS:
+            raise ValueError("Session limit reached; revoke unused sessions")
         token = secrets.token_urlsafe(40)
         expires_at = time.time() + ttl_seconds
+        previous = self._sessions.get(session)
+        if previous is not None:
+            self._tokens.pop(previous["token_hash"], None)
+        token_hash = hashlib.sha256(token.encode()).digest()
         self._sessions[session] = {
-            "token_hash": hashlib.sha256(token.encode()).digest(),
+            "token_hash": token_hash, "deadline": time.monotonic() + ttl_seconds,
             "client": policy.client, "rights": policy.rights, "space": space,
             "project": project, "expires_at": expires_at,
             "peer_uid": peer_uid,
         }
+        self._tokens[token_hash] = session
         return {"session": session, "token": token, "client": client,
                 "space": space, "project": project, "rights": sorted(policy.rights),
                 "expires_at": int(expires_at), "peer_uid": peer_uid}
@@ -329,6 +400,9 @@ class BrokerDaemon:
         if not isinstance(args, dict):
             raise ValueError("Args invalidos")
         with self._lock:
+            if self._stopping:
+                raise PermissionError("Broker stopping")
+            self._prune_sessions()
             if action == "grant":
                 session = _scope(args["session"], "session")
                 if session in self._sessions:
@@ -356,29 +430,43 @@ class BrokerDaemon:
                 return self._issue(session, client, space, project, rights, ttl, peer_uid)
             if action == "revoke":
                 session = _scope(args["session"], "session")
-                return {"revoked": self._sessions.pop(session, None) is not None}
+                previous = self._sessions.pop(session, None)
+                if previous is not None:
+                    self._tokens.pop(previous["token_hash"], None)
+                return {"revoked": previous is not None}
             if action == "sessions":
                 return [{"session": s, "client": g["client"], "space": g["space"],
                          "project": g["project"], "rights": sorted(g["rights"]),
                          "peer_uid": g["peer_uid"], "expires_at": int(g["expires_at"])}
-                        for s, g in self._sessions.items() if time.time() < g["expires_at"]]
+                        for s, g in self._sessions.items() if not _expired(g)]
             raise ValueError("Accion admin desconocida")
 
     def _client(self, msg: dict, *, peer_uid: int) -> Any:
         token = msg.get("token")
         action = msg.get("action")
         args = msg.get("args", {})
-        if not isinstance(token, str) or len(token) < 32 or not isinstance(args, dict):
+        if not isinstance(token, str) or not 32 <= len(token) <= 512 or not isinstance(args, dict):
             raise PermissionError("Credencial invalida")
         with self._lock:
+            if self._stopping:
+                raise PermissionError("Broker stopping")
             token_hash = hashlib.sha256(token.encode()).digest()
-            grant = next((g for g in self._sessions.values()
-                          if hmac.compare_digest(token_hash, g["token_hash"])
-                          and time.time() < g["expires_at"]), None)
-            if grant is None:
+            session = self._tokens.get(token_hash)
+            grant = self._sessions.get(session)
+            if grant is None or _expired(grant):
                 raise PermissionError("Sesion revocada, desconocida o caducada")
             if peer_uid != grant["peer_uid"]:
                 raise PermissionError("El UID del proceso no coincide con la sesion")
+            if not isinstance(action, str) or action not in ALLOWED_ARGS:
+                raise PermissionError("Accion no permitida")
+            if any(k in args for k in ("project", "space", "client", "rights", "source", "actor", "peer_uid")):
+                raise PermissionError("No se permite elegir contexto")
+            if set(args) - ALLOWED_ARGS[action]:
+                raise ValueError("Unknown operation fields")
+            if action in ("update", "forget"):
+                revision = args.get("expected_revision")
+                if type(revision) is not int or revision < 1:
+                    raise ValueError("A positive expected_revision is required")
             if action == "profile":
                 return {k: (sorted(v) if isinstance(v, frozenset) else v)
                         for k, v in grant.items() if k in ("client", "space", "project", "rights", "expires_at")}
@@ -392,9 +480,15 @@ class BrokerDaemon:
             key = (grant["space"], grant["project"], grant["client"])
             store = self._stores.get(key)
             if store is None:
+                if len(self._stores) >= MAX_STORES:
+                    oldest = next(iter(self._stores))
+                    self._stores.pop(oldest).close()
                 store = MemoryStore(self.db, space=grant["space"],
                                     project=grant["project"], actor=grant["client"])
                 self._stores[key] = store
+            else:
+                # Touch entry to retain the most recently used connections.
+                self._stores[key] = self._stores.pop(key)
             if action == "remember":
                 saved = store.remember(**args, source="mcp:" + grant["client"])
                 if "read" not in grant["rights"]:

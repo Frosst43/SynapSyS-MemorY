@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prueba REAL MCP stdio en tres procesos con broker local y SQLite temporal.
+"""Prueba REAL MCP stdio en cuatro procesos con broker local y SQLite temporal.
 
 Requiere el paquete mcp. No lee memorias ni configuraciones del usuario.
 """
@@ -25,12 +25,13 @@ async def _session(socket_path, *, token, callback):
     from mcp.client.stdio import stdio_client
 
     root = Path(__file__).resolve().parents[1]
-    env = os.environ.copy()
+    # Do not forward real admin keys, provider secrets or token files to tests.
+    env = {"PATH": os.defpath, "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
     env.update({
         "SYMEM_BROKER_SOCKET": str(socket_path),
         "SYMEM_SESSION_TOKEN": token,
         "SYMEM_ALLOW_LEGACY_DIRECT": "0",
-        "PYTHONPATH": str(root / "src") + os.pathsep + env.get("PYTHONPATH", ""),
+        "PYTHONPATH": str(root / "src"),
     })
     params = StdioServerParameters(
         command=sys.executable, args=["-m", "synapsys_memory.mcp_server"], env=env,
@@ -84,7 +85,31 @@ async def main():
                 assert "memoria compartida" not in _joined(result), _joined(result)
             await _session(client_sock, token=openclaw, callback=isolated)
 
-    print("PASS: MCP stdio + broker; lectura compartida, derechos y aislamiento")
+            write_only = grant("write-only", "sdk-writer", "demo", "write")
+            async def writer_only(session, tools):
+                assert tools == {"memory_remember", "memory_update"}, tools
+                result = await session.call_tool("memory_remember", {
+                    "body": "PRIVATE_WRITE_ONLY_PAYLOAD", "title": "Private writer test",
+                })
+                assert not result.isError, _joined(result)
+                assert "PRIVATE_WRITE_ONLY_PAYLOAD" not in _joined(result), "Content leaked in acknowledgement"
+                import json
+                ack = getattr(result, "structuredContent", None)
+                if ack is None:
+                    ack = json.loads(next(item.text for item in result.content if hasattr(item, "text")))
+                assert set(ack) == {"created", "id", "revision"}, ack
+                updated = await session.call_tool("memory_update", {
+                    "id": ack["id"], "body": "PRIVATE_WRITE_ONLY_UPDATE", "expected_revision": ack["revision"],
+                })
+                assert not updated.isError, _joined(updated)
+                assert "PRIVATE_WRITE_ONLY_UPDATE" not in _joined(updated)
+                conflict = await session.call_tool("memory_update", {
+                    "id": ack["id"], "body": "STALE", "expected_revision": ack["revision"],
+                })
+                assert conflict.isError, "Stale update unexpectedly accepted"
+            await _session(client_sock, token=write_only, callback=writer_only)
+
+    print("PASS: MCP stdio + broker; shared/read-only/write-only, isolation and conflict rejection")
 
 
 if __name__ == "__main__":
