@@ -4,11 +4,11 @@
 
 ## Estado: 1.0.0-rc1, NO estable
 
-Esta candidata corrige fallos reproducidos sobre `1350b71` (dev5). No se ha
-fusionado en `main` ni se ha certificado una integracion con un agente real.
-El aislamiento de memoria NO revoca por si solo los permisos de archivos de
-un proceso ya lanzado. El cierre coordinado del sandbox al cambiar de
-proyecto sigue siendo un bloqueo de salida.
+Esta candidata corrige fallos reproducidos sobre `1350b71` (dev5). La rama
+experimental ha validado el cierre coordinado del sandbox al cambiar de
+proyecto y las consultas MCP de OpenCode con Ollama y Strata en proyectos de
+prueba. La validación del despliegue para uso diario sigue pendiente.
+[Pilotos y criterios de cierre](docs/PERSISTENCE_PILOT.md#remaining-v1-acceptance)
 
 No incluye LLM, embeddings, Ollama, inferencia ni GPU. La memoria no decide
 que es verdad: guarda y consulta datos suministrados por clientes autorizados.

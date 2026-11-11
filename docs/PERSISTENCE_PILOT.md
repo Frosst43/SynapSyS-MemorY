@@ -413,11 +413,35 @@ open during the switch.
 PYTHONPATH=src .venv/bin/python -B scripts/verify_opencode_runtime_bridge.py
 ```
 
-The real runtime test remains pending. For Ollama, the bridge targets its
-OpenAI-compatible chat API. Ollama's local-only setting and the installed
-model determine where inference runs.
+### OpenCode `memory_get` with local Ollama (PASS)
+
+OpenCode used `qwen3:1.7b` through the restricted bridge in a temporary
+local-only Ollama instance. Across an approved A-to-B switch, four MCP calls
+returned each project's own synthetic record and `null` for the other
+project's record. Each grant was read-only. The controller revoked A's token
+and closed its sandbox before B received a grant. The test used disposable
+workspaces and SQLite.
+
 [Ollama chat API](https://docs.ollama.com/api/openai-compatibility)
 · [Ollama local-only mode](https://docs.ollama.com/faq#how-do-i-disable-ollamas-cloud-features)
+
+### OpenCode `memory_recall` with Strata and the installed broker (PASS)
+
+OpenCode 2.2.5 ran inside Bubblewrap with a read-only test workspace. The
+controller connected it through the restricted bridge to Qwen3.6-35B-A3B
+Uncensored (HauhauCS Aggressive Q4_K_M) served by the existing Strata profile
+on host loopback. The profile used its saved 32K context. A temporary
+OpenCode configuration set `codemode: false` to expose the MCP tools directly.
+
+The prompt supplied the topic `piloto persistente`. OpenCode's tool output
+showed that the model called `memory_recall` with a topic query and retrieved
+one record. The result matched the existing synthetic fixture's ID, project,
+revision, and body. The installed broker reported a project-scoped grant
+with `read` as its only right.
+
+At exit, the controller revoked the grant and closed the sandbox. The
+broker remained active, and the SQLite file and Strata profile matched their
+pre-test checksums. The Strata instance released the model after the test.
 
 ### Installed broker permissions and Mobile policy preflight (PASS)
 
@@ -443,8 +467,10 @@ through the owner's approval terminal is still pending.
 
 **V1 stable is BLOCKED.**
 
-- Exercise the controller with the operator's intended workspaces and verify
-  their file permissions from an approved session. Validate separate OS
-  identities for any deployment that uses them.
-- Verify a tool call from OpenCode through the restricted bridge with the
-  intended local model runtime.
+- Exercise the controller with the workspaces intended for daily use. Verify
+  the configured mounts, exclusions, file access, and OpenCode MCP mode from
+  an approved session. Review private broker credentials and validate separate
+  OS identities for deployments that use them.
+- Run `scripts/validate_release.py` against the final candidate on the target
+  machine and review its results alongside the manual acceptance evidence.
+  The component validator leaves the stable release decision to the operator.
