@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from synapsys_memory.sandbox import MemoryBinding, ProjectSandbox, build_command
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('opencode_connection_probe', ROOT / 'scripts/probe_opencode_mcp.py')
 probe = importlib.util.module_from_spec(SPEC)
@@ -75,6 +77,23 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe.runtime_arguments(['/usr/bin/bwrap','--unshare-net','--','program'],
                 config=Path('relative'), binary=Path('/binary'), venv=Path('/venv'), source=Path('/src'))
+
+    def test_runtime_keeps_only_the_active_broker_binding(self):
+        data = Path('/broker/data.sock')
+        token = Path('/controller/project-b.token')
+        spec = ProjectSandbox('project-b', Path('/project-b'), True, MemoryBinding(data, token, 'space'))
+        base = build_command(spec, [probe.PILOT_BINARY, 'mcp', 'list'], bwrap='/usr/bin/bwrap')
+        args = probe.runtime_arguments(
+            base, config=Path('/fixture/config.json'), binary=Path('/fixture/opencode'),
+            venv=Path('/runtime/.venv'), source=Path('/runtime/src'),
+        )
+        readonly = {args[i + 2]: args[i + 1] for i, arg in enumerate(args) if arg == '--ro-bind'}
+        self.assertEqual(str(data), readonly['/run/synapsys-memory/data.sock'])
+        self.assertEqual(str(token), readonly['/run/synapsys-memory/session.token'])
+        self.assertEqual('/runtime/.venv', readonly['/runtime/.venv'])
+        self.assertEqual('/runtime/src', readonly['/runtime/src'])
+        self.assertNotIn(str(data.parent), readonly.values())
+        self.assertNotIn(str(token.parent), readonly.values())
 
 
 class EvidenceTests(unittest.TestCase):

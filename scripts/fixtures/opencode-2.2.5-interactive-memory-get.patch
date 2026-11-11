@@ -1,0 +1,92 @@
+--- a/packages/core/src/plugin/command.ts
++++ b/packages/core/src/plugin/command.ts
+@@ -3,5 +3,8 @@
+ import { define } from "@opencode/plugin/effect/plugin"
++import { SymemProbe } from "@opencode/schema/symem-probe"
+ import { Effect, Stream } from "effect"
++import { createHash } from "node:crypto"
++import { existsSync, readFileSync, writeFileSync } from "node:fs"
+ import { Bus } from "../bus.js"
+ import { Location } from "../location.js"
+ import { Mcp } from "../mcp/index.js"
+@@ -14,6 +17,43 @@
+     const location = yield* Location.Service
+     const mcp = yield* Mcp.Service
+     const bus = yield* Bus.Service
++    // This code is only built into the disposable validation executable.
++    if (existsSync("/workspace/symem-probe.json")) {
++      const probe = Effect.gen(function* () {
++        for (let attempt = 0; ; attempt++) {
++          if ((yield* mcp.servers()).some(
++            (entry) => entry.name === "synapsys-memory" && entry.status.status === "connected",
++          )) break
++          if (attempt === 160) throw new Error("MCP readiness timed out")
++          yield* Effect.sleep("50 millis")
++        }
++        const fixture = JSON.parse(readFileSync("/workspace/symem-probe.json", "utf8"))
++        const tools = (yield* mcp.tools()).filter((tool) => tool.server === "synapsys-memory").map((tool) => tool.name)
++        if (!tools.includes("memory_get") || tools.some((name) =>
++          ["memory_remember", "memory_update", "memory_forget"].includes(name)))
++          throw new Error("Unexpected tools for read-only grant")
++
++        const get = (id: string) => mcp.callTool({ server: "synapsys-memory", name: "memory_get", args: { id } })
++        const reply = yield* get(fixture.own.id)
++        const memory = (reply.structured as { result?: Record<string, unknown> })?.result
++        if (reply.isError || !memory || memory.id !== fixture.own.id || memory.space !== fixture.space ||
++            memory.project !== fixture.project || memory.revision !== fixture.own.revision ||
++            typeof memory.body !== "string" || createHash("sha256").update(memory.body).digest("hex") !== fixture.own.sha256)
++          throw new Error("Own memory did not match the fixture")
++
++        const foreign = yield* get(fixture.foreign)
++        if (foreign.isError || (foreign.structured as { result?: unknown })?.result !== null)
++          throw new Error("Expected a successful null for the other project")
++
++        writeFileSync("/workspace/symem-result.json", JSON.stringify({
++          own_memory_matches: true, foreign_memory_null: true, read_only_tools: tools.sort(),
++          service_pid: process.pid,
++        }), { flag: "wx", mode: 0o600 })
++      })
++      yield* ctx.rpc.register(SymemProbe, {
++        check: () => probe.pipe(Effect.as(null), Effect.orDie),
++      }).pipe(Effect.orDie)
++    }
+     const loaded = { prompts: [] as Mcp.Prompt[] }
+     yield* bus.subscribe(Mcp.PromptsChanged).pipe(
+       Stream.runForEach(() =>
+--- /dev/null
++++ b/packages/schema/src/symem-probe.ts
+@@ -0,0 +1,13 @@
++import { Schema } from "effect"
++import { Rpc } from "./rpc.js"
++
++export const SymemProbe = Rpc.define({
++  id: "synapsys.validation",
++  events: {},
++  methods: {
++    check: {
++      input: Schema.toStandardSchemaV1(Schema.Struct({})),
++      output: Schema.toStandardSchemaV1(Schema.Null),
++    },
++  },
++})
+--- a/packages/tui/src/app.tsx
++++ b/packages/tui/src/app.tsx
+@@ -1,4 +1,5 @@
+ import { existsSync } from "fs"
++import { SymemProbe } from "@opencode/schema/symem-probe"
+ import path from "path"
+ import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
+ import "./component/spinner-renderable"
+@@ -1055,6 +1056,12 @@
+         title: "View status",
+         slash: { name: "status" },
+         run: () => {
++          if (existsSync("/workspace/symem-probe.json")) {
++            void client.api.rpc(SymemProbe).check({}, { location: { directory: "/workspace" } }).then(
++              () => toast.show({ message: "Synapsys MCP check passed", variant: "success" }),
++              () => toast.show({ message: "Synapsys MCP check failed", variant: "warning" }),
++            )
++          }
+           dialog.replace(() => <DialogStatus />)
+         },
+         category: "System",

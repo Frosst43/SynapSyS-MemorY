@@ -1,0 +1,18 @@
+[Unit]
+Description=SynapSyS-MemorY local memory broker
+
+[Service]
+Type=exec
+UMask=0077
+NoNewPrivileges=yes
+RuntimeDirectory=synapsys-memory-broker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+UnsetEnvironment=SYMEM_ADMIN_KEY
+ExecStart="%h/.local/bin/synapsys-memory-broker" --admin-key-file "%E/synapsys-memory/broker-admin.key" --socket "%t/synapsys-memory-broker/data.sock" --admin-socket "%t/synapsys-memory-broker/admin.sock" serve --db "%h/.local/state/synapsys-memory/memory.sqlite3"
+Restart=on-failure
+RestartSec=1s
+TimeoutStopSec=30s
+
+[Install]
+WantedBy=default.target

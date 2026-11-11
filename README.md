@@ -21,7 +21,8 @@ que es verdad: guarda y consulta datos suministrados por clientes autorizados.
 - Concesiones revocables y limites de sesiones, conexiones y handlers.
 - Migraciones atomicas, backups privados y consistentes, auditoria sin cuerpos.
 - Lanzador Bubblewrap experimental con red desactivada y un unico workspace.
-- Rechazo de directorios solapados, hardlinks, archivos especiales y politicas ambiguas.
+- Rechazo de directorios solapados, enlaces duros fuera del árbol auditado,
+  archivos especiales y políticas ambiguas.
 
 ## Datos privados frente al codigo publicado
 
@@ -54,6 +55,9 @@ privada temporal fuera del repositorio. Un requisito ausente se informa como
 BLOCKED, nunca como PASS. Aunque los componentes pasen, muestra los gates
 manuales pendientes y no certifica una version estable.
 
+La rama experimental incluye una unidad de usuario para systemd y pruebas
+de recuperacion y lectura MCP. [Pilotos, despliegue y pendientes de v1](docs/PERSISTENCE_PILOT.md)
+
 ## Seguridad y limites de uso
 
 Usa un controlador de confianza, credenciales privadas y separacion OS del
@@ -66,9 +70,9 @@ privilegios especiales. La colaboracion padre/hijo sigue aplazada.
 
 Las comprobaciones de rutas y enlaces son un preflight, no una defensa
 contra un proceso no aislado del mismo UID que cambie el host concurrentemente.
-Bubblewrap no es por si solo un producto de seguridad completo. La red
-bloqueada impide conectarse directamente al Ollama del host; no desactives el
- aislamiento para eludirlo. Falta integrar un acceso explicitamente autorizado.
+Bubblewrap mantiene la red aislada. El controlador permite autorizar el chat
+de un modelo local mediante un socket privado de la sesión.
+[Acceso restringido al runtime local](docs/PERSISTENCE_PILOT.md#restricted-local-runtime-access)
 
 `backup` es una operacion de administrador que incluye TODA la base, no una
 exportacion por proyecto. No se expone a herramientas MCP ni clientes del

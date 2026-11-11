@@ -78,7 +78,7 @@ class ManagedSandbox:
         self.stopped = False
 
     @classmethod
-    def start(cls, argv: list[str], *, output, timeout: float = 10.0) -> 'ManagedSandbox':
+    def start(cls, argv: list[str], *, output, stdin=subprocess.DEVNULL, timeout: float = 10.0) -> 'ManagedSandbox':
         if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
             raise SandboxError('Linux pidfds are required; no insecure fallback')
         binary = _trusted_bwrap()
@@ -97,7 +97,7 @@ class ManagedSandbox:
         handle = None
         try:
             command = [binary, '--info-fd', str(info_w), '--block-fd', str(gate_r), *argv[1:]]
-            proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
+            proc = subprocess.Popen(command, stdin=stdin, stdout=output,
                                     stderr=subprocess.STDOUT, close_fds=True,
                                     pass_fds=(info_w, gate_r), start_new_session=True,
                                     env={'PATH': os.defpath, 'LANG': 'C.UTF-8'})
