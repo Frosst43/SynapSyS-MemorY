@@ -18,7 +18,7 @@ import tempfile
 from threading import Event, Thread
 import time
 
-from synapsys_memory.opencode_runtime import configuration, native_binary, private_write, repository_runtime
+from synapsys_memory.opencode_runtime import native_binary, private_write, repository_runtime
 from synapsys_memory.runtime_bridge import CHAT_PATH, LOOPBACK, MAX_REQUEST
 from synapsys_memory.sandbox import _trusted_bwrap
 
@@ -225,13 +225,11 @@ def run(opencode: Path) -> dict:
 
         def prepare(workspace: Path) -> None:
             upstream.projects[workspace.name] = json.loads((workspace / "symem-probe.json").read_text())
-            config = configuration(str(venv / "bin/python"))
-            config["mcp"]["servers"]["synapsys-memory"]["codemode"] = False
-            config["permissions"] = [{"action": "*", "resource": "*", "effect": "deny"}] + [
+            permissions = [{"action": "*", "resource": "*", "effect": "deny"}] + [
                 {"action": f"synapsys-memory_{tool}", "resource": "*", "effect": "allow"}
                 for tool in sorted(READ_TOOLS)
             ]
-            private_write(workspace / "opencode.json", json.dumps(config))
+            private_write(workspace / "opencode.json", json.dumps({"permissions": permissions}))
 
         def verify(terminal: Terminal, workspace: Path, _init: int) -> None:
             nonlocal holder, held_response

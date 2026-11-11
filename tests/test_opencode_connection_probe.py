@@ -23,6 +23,7 @@ class ConfigTests(unittest.TestCase):
         server = doc['mcp']['servers']['synapsys-memory']
         self.assertEqual('local', server['type'])
         self.assertEqual('legacy', server['protocol'])
+        self.assertIs(server['codemode'], False)
         self.assertEqual(['/runtime/bin/python', '-I', '-m', 'synapsys_memory.mcp_server'], server['command'])
 
     def test_no_provider_or_model_or_admin_credential(self):

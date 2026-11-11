@@ -25,6 +25,7 @@ def configuration(python: str, *, runtime_model: str | None = None) -> dict:
         "mcp": {"servers": {SERVER_NAME: {
             "type": "local",
             "protocol": "legacy",
+            "codemode": False,
             "command": [python, "-I", "-m", "synapsys_memory.mcp_server"],
             "environment": {
                 "SYMEM_BROKER_SOCKET": "/run/synapsys-memory/data.sock",

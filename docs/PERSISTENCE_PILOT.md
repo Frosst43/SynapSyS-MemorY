@@ -303,7 +303,10 @@ PYTHONPATH=src .venv/bin/python -B -m synapsys_memory.controller_cli \
 ```
 
 Approve each project in the controller terminal. OpenCode starts in the
-second terminal and its Status panel opens with `Ctrl+X`, then `s`. An
+second terminal and its Status panel opens with `Ctrl+X`, then `s`. The
+controller's OpenCode configuration exposes the SynapSyS memory tools
+directly with `codemode: false`. Once the MCP connects, ask OpenCode to use
+`memory_recall` with a topic or `memory_get` with a record ID. An
 approved switch closes the old sandbox and connects the same second terminal
 to a fresh pseudoterminal in the new sandbox. Use `:salir` in the approval
 terminal to close the active sandbox, then `Ctrl+C` in the waiting OpenCode
@@ -388,9 +391,10 @@ application keeps its isolated network namespace throughout the test.
 ### Restricted local runtime access
 
 Pass `--runtime-model MODEL_ID` to the controller with `--opencode` to
-authorize one model for each approved sandbox. The host runtime must listen
-on `127.0.0.1:11434`. Use `--runtime-port PORT` if the local server uses
-another port. The managed OpenCode configuration selects
+authorize one model for each approved sandbox. Start the host runtime on
+loopback. The controller uses `127.0.0.1:11434` by default. Use
+`--runtime-port PORT` for the existing Strata profile's port. The managed
+OpenCode configuration selects
 `local-runtime/chat`, which sends the authorized model ID.
 [OpenCode provider configuration](https://opencode.ai/docs/providers/)
 
@@ -443,6 +447,13 @@ At exit, the controller revoked the grant and closed the sandbox. The
 broker remained active, and the SQLite file and Strata profile matched their
 pre-test checksums. The Strata instance released the model after the test.
 
+After the controller adopted direct MCP tools as its default, the test
+passed again with no workspace OpenCode configuration. In that run, the
+workspace mount was read-only and its excluded directory appeared as an
+empty read-only mount. The SQLite file, admin socket, admin key, and project
+policy were outside the sandbox. The broker revoked the read-only grant at
+exit and the sandbox closed.
+
 ### Installed broker permissions and Mobile policy preflight (PASS)
 
 On Kubuntu, the data and admin sockets resolved to the installed broker's
@@ -467,10 +478,13 @@ through the owner's approval terminal is still pending.
 
 **V1 stable is BLOCKED.**
 
-- Exercise the controller with the workspaces intended for daily use. Verify
-  the configured mounts, exclusions, file access, and OpenCode MCP mode from
-  an approved session. Review private broker credentials and validate separate
-  OS identities for deployments that use them.
-- Run `scripts/validate_release.py` against the final candidate on the target
-  machine and review its results alongside the manual acceptance evidence.
-  The component validator leaves the stable release decision to the operator.
+On the target machine, `scripts/validate_release.py` passed all 237 unit and
+socket tests, the MCP stdio check, and the Bubblewrap/broker check. The two
+interactive OpenCode simulations also passed against the managed MCP
+configuration. The broker's directories had mode `0700` and its sockets,
+admin key and SQLite file had mode `0600`, owned by the service user.
+
+Approve the workspaces intended for daily use and verify their configured
+mounts, exclusions, file access, and OpenCode connection from the approved
+sessions. Review separate OS identities for deployments that use them. The
+component validator leaves the stable release decision to the operator.

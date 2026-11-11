@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 
-from synapsys_memory.opencode_runtime import configuration, native_binary, private_write, repository_runtime
+from synapsys_memory.opencode_runtime import native_binary, private_write, repository_runtime
 from synapsys_memory.sandbox import _trusted_bwrap
 
 from verify_opencode_interactive_memory_get import (
@@ -25,16 +25,13 @@ HERE = Path(__file__).resolve().parent
 
 
 def prepare_project(workspace: Path) -> None:
-    venv, _ = repository_runtime()
     plugin = workspace / "provider"
     plugin.mkdir(mode=0o700)
     private_write(plugin / "package.json", json.dumps({
         "name": "symem-fixture", "type": "module", "exports": {"./server": "./server.js"},
     }))
     private_write(plugin / "server.js", (HERE / "fixtures/simulated-provider.js").read_text())
-    config = configuration(str(venv / "bin/python"))
-    config["mcp"]["servers"]["synapsys-memory"]["codemode"] = False
-    config.update({
+    config = {
         "model": "symem-fixture/scripted",
         "snapshots": False,
         "plugins": ["./provider"],
@@ -50,7 +47,7 @@ def prepare_project(workspace: Path) -> None:
             {"action": f"synapsys-memory_{tool}", "resource": "*", "effect": "allow"}
             for tool in sorted(READ_TOOLS)
         ],
-    })
+    }
     private_write(workspace / "opencode.json", json.dumps(config))
 
 
