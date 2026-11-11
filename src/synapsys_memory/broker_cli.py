@@ -9,14 +9,26 @@ import sys
 import threading
 
 from .broker import BrokerDaemon, admin_request
+from .secureio import read_private
 
 _BASE = Path.home() / ".local" / "state" / "synapsys-memory"
+
+
+def read_admin_key_file(path: Path) -> str:
+    try:
+        key = read_private(path, limit=4096).decode("utf-8").rstrip("\r\n")
+    except UnicodeDecodeError as exc:
+        raise ValueError("El archivo de clave administrativa debe ser texto UTF-8") from exc
+    if len(key) < 48:
+        raise ValueError("--admin-key-file debe contener al menos 48 caracteres")
+    return key
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="synapsys-memory-broker")
     parser.add_argument("--socket", type=Path, default=_BASE / "data.sock")
     parser.add_argument("--admin-socket", type=Path, default=_BASE / "admin.sock")
+    parser.add_argument("--admin-key-file", type=Path, help="Archivo privado con la clave administrativa")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="Servidor local propietario de SQLite")
     serve.add_argument("--db", type=Path, default=_BASE / "memory.sqlite3")
@@ -33,10 +45,14 @@ def main(argv: list[str] | None = None) -> int:
             subp.add_argument("--ttl-seconds", type=int, default=1800)
             subp.add_argument("--peer-uid", type=int, default=None, help="UID Linux del ejecutor autorizado")
     args = parser.parse_args(argv)
-    key = os.environ.get("SYMEM_ADMIN_KEY")
-    if not key or len(key) < 48:
-        parser.error("SYMEM_ADMIN_KEY debe contener al menos 48 caracteres")
     try:
+        if args.admin_key_file is None:
+            key = os.environ.get("SYMEM_ADMIN_KEY", "")
+            if len(key) < 48:
+                parser.error("SYMEM_ADMIN_KEY debe contener al menos 48 caracteres")
+        else:
+            key = read_admin_key_file(args.admin_key_file)
+
         if args.command == "serve":
             stopping = threading.Event()
             def end(_sig, _frame):

@@ -8,6 +8,7 @@ Bubblewrap's namespaces; memory grants are handled independently by broker.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from dataclasses import dataclass
 import json
 import os
@@ -47,6 +48,7 @@ class ProjectSandbox:
     workspace: Path
     read_only: bool
     memory: MemoryBinding | None = None
+    excluded_dirs: tuple[str, ...] = ()
 
 
 def _config_file(path: Path) -> None:
@@ -105,16 +107,36 @@ def _workspace(value: str) -> Path:
     return real
 
 
-def _audit_workspace(workspace: Path) -> None:
+def _excluded_dirs(workspace: Path, value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or any(
+        not isinstance(name, str) or name in ("", ".", "..") or "/" in name or "\x00" in name
+        for name in value
+    ):
+        raise SandboxError("exclude requiere nombres de directorios de primer nivel")
+    if len(set(value)) != len(value):
+        raise SandboxError("exclude contiene directorios duplicados")
+    for name in value:
+        path = workspace / name
+        if path.is_symlink() or not path.is_dir():
+            raise SandboxError("exclude requiere directorios reales que ya existan")
+    return tuple(value)
+
+
+def _audit_workspace(workspace: Path, excluded_dirs: tuple[str, ...] = ()) -> None:
     """Preflight only: host processes must not mutate this tree during launch.
 
     A hardlink to a foreign file remains the same inode through a bind mount.
     Special files could expose host sockets/devices despite network isolation.
     """
     count = 0
+    hardlinks: Counter[tuple[int, int, int]] = Counter()
+
     def fail(exc):
         raise SandboxError("Workspace tree cannot be inspected") from exc
+
     for folder, dirs, files in os.walk(workspace, followlinks=False, onerror=fail):
+        if folder == str(workspace) and excluded_dirs:
+            dirs[:] = [name for name in dirs if name not in excluded_dirs]
         for name in dirs + files:
             count += 1
             if count > 200_000:
@@ -126,9 +148,11 @@ def _audit_workspace(workspace: Path) -> None:
                     raise SandboxError("Workspace symlink escapes its project")
             elif stat.S_ISREG(info.st_mode):
                 if info.st_nlink != 1:
-                    raise SandboxError("Workspace contains hardlinked files")
+                    hardlinks[info.st_dev, info.st_ino, info.st_nlink] += 1
             elif not stat.S_ISDIR(info.st_mode):
                 raise SandboxError("Workspace contains socket, FIFO or device")
+    if any(seen != nlink for (_, _, nlink), seen in hardlinks.items()):
+        raise SandboxError("Workspace contains hardlinks outside its audited files")
 
 
 def _trusted_memory_path(value: str, *, socket_file: bool) -> Path:
@@ -157,7 +181,13 @@ def _trusted_memory_path(value: str, *, socket_file: bool) -> Path:
     return real
 
 
-def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
+def load_policy(
+    policy_path: str | Path,
+    project_id: str,
+    *,
+    protected_paths: tuple[Path, ...] = (),
+    workspace_only: bool = False,
+) -> ProjectSandbox:
     if not isinstance(project_id, str) or not _PROJECT_ID.fullmatch(project_id) or project_id in (".", ".."):
         raise SandboxError("Identificador de proyecto no valido")
     path = Path(policy_path)
@@ -172,24 +202,30 @@ def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
     if not isinstance(projects, dict) or project_id not in projects:
         raise SandboxError("El proyecto no esta autorizado en esta politica")
     required = {"workspace", "read_only"}
-    workspaces: dict[str, Path] = {}
+    allowed = required | {"exclude"}
+    if not workspace_only:
+        allowed.add("memory")
+    workspaces: dict[str, tuple[Path, tuple[str, ...]]] = {}
     for name, definition in projects.items():
         if (not isinstance(name, str) or not _PROJECT_ID.fullmatch(name)
                 or not isinstance(definition, dict)
                 or not required <= set(definition)
-                or not set(definition) <= required | {"memory"}
+                or not set(definition) <= allowed
                 or type(definition["read_only"]) is not bool):
             raise SandboxError("Politica del proyecto incompleta o ambigua")
         candidate = _workspace(definition["workspace"])
         if path.is_relative_to(candidate):
             raise SandboxError("Policy is inside a registered project")
-        for previous in workspaces.values():
+        if any(candidate.is_relative_to(protected) or protected.is_relative_to(candidate)
+               for protected in protected_paths):
+            raise SandboxError("Un workspace se solapa con una ruta privada del controlador")
+        for previous, _ in workspaces.values():
             if candidate.is_relative_to(previous) or previous.is_relative_to(candidate):
                 raise SandboxError("Project workspaces overlap; combined projects are not enabled")
-        workspaces[name] = candidate
+        workspaces[name] = candidate, _excluded_dirs(candidate, definition.get("exclude", []))
     item = projects[project_id]
-    ws = workspaces[project_id]
-    _audit_workspace(ws)
+    ws, excluded = workspaces[project_id]
+    _audit_workspace(ws, excluded)
     binding = None
     if "memory" in item:
         memory = item["memory"]
@@ -208,7 +244,7 @@ def load_policy(policy_path: str | Path, project_id: str) -> ProjectSandbox:
             if sock.is_relative_to(other_ws) or token.is_relative_to(other_ws):
                 raise SandboxError("Credenciales de memoria dentro de un workspace")
         binding = MemoryBinding(sock, token, memory["space"])
-    result = ProjectSandbox(project_id, ws, item["read_only"], binding)
+    result = ProjectSandbox(project_id, ws, item["read_only"], binding, excluded)
     # Una base de SQLite del broker no debe quedar dentro del workspace de agente.
     # Esa separacion se asegura al desplegar el broker bajo otro UID.
     return result
@@ -235,6 +271,10 @@ def build_command(spec: ProjectSandbox, program: list[str], *, bwrap: str) -> li
         "--tmpfs", "/run", "--dir", "/workspace",
         "--ro-bind" if spec.read_only else "--bind", str(spec.workspace), "/workspace",
     ]
+    # The audit skipped these subtrees, so hide them before any client code runs.
+    for name in spec.excluded_dirs:
+        target = f"/workspace/{name}"
+        args += ["--tmpfs", target, "--remount-ro", target]
     if spec.memory is not None:
         # Bind precisely the data socket and single-project token, never
         # the parent directory (which may contain admin.sock / SQLite).

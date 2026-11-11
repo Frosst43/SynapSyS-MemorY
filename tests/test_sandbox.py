@@ -69,6 +69,16 @@ class SandboxTests(unittest.TestCase):
         with self.assertRaises(SandboxError):
             load_policy(self.cfg, "a")
 
+    def test_controller_checks_protected_paths_for_every_workspace(self):
+        for protected in (self.root_b / "key", self.root_b, self.base):
+            with self.subTest(protected=protected), self.assertRaisesRegex(SandboxError, "ruta privada"):
+                load_policy(self.cfg, "a", protected_paths=(protected,), workspace_only=True)
+
+    def test_workspace_policy_rejects_static_memory_binding(self):
+        self.write_config({"a": {"workspace": str(self.root_a), "read_only": False, "memory": {}}})
+        with self.assertRaises(SandboxError):
+            load_policy(self.cfg, "a", workspace_only=True)
+
     def test_bwrap_launch_failure_does_not_fallback(self):
         with patch("synapsys_memory.sandbox._trusted_bwrap", return_value="/usr/bin/bwrap"), \
              patch("synapsys_memory.sandbox.subprocess.run", side_effect=OSError("namespace denied")):
@@ -109,6 +119,50 @@ class SandboxTests(unittest.TestCase):
         with patch("synapsys_memory.sandbox._mountinfo_lines", return_value=fake.splitlines()):
             with self.assertRaises(SandboxError):
                 load_policy(self.cfg, "a")
+
+    def test_explicit_build_directory_is_masked_after_workspace_bind(self):
+        build = self.root_a / "build"
+        build.mkdir()
+        (build / "foreign").symlink_to(self.root_b)
+        with self.assertRaisesRegex(SandboxError, "symlink escapes"):
+            load_policy(self.cfg, "a")
+
+        self.write_config({"a": {"workspace": str(self.root_a), "read_only": True, "exclude": ["build"]}})
+        spec = load_policy(self.cfg, "a", workspace_only=True)
+        argv = build_command(spec, ["true"], bwrap="/usr/bin/bwrap")
+        workspace_bind = argv.index(str(self.root_a))
+        self.assertEqual(
+            ["--ro-bind", str(self.root_a), "/workspace",
+             "--tmpfs", "/workspace/build", "--remount-ro", "/workspace/build"],
+            argv[workspace_bind - 1:workspace_bind + 6],
+        )
+
+        mount = f"41 30 0:31 / {build}/nested"
+        with patch("synapsys_memory.sandbox._mountinfo_lines", return_value=[mount]):
+            with self.assertRaisesRegex(SandboxError, "montaje anidado"):
+                load_policy(self.cfg, "a", workspace_only=True)
+
+    def test_invalid_exclusions_are_rejected(self):
+        (self.root_a / "build").mkdir()
+        (self.root_a / "build-link").symlink_to(self.root_a / "build")
+        (self.root_a / "file").touch()
+        for exclude in ("build", [".."], ["/tmp"], ["build/subdir"], ["build", "build"],
+                        ["missing"], ["build-link"], ["file"]):
+            with self.subTest(exclude=exclude), self.assertRaisesRegex(SandboxError, "exclude"):
+                self.write_config({"a": {"workspace": str(self.root_a), "read_only": True, "exclude": exclude}})
+                load_policy(self.cfg, "a")
+
+    def test_hardlinks_must_all_be_in_audited_files(self):
+        build = self.root_a / "build"
+        build.mkdir()
+        tracked = self.root_a / "file"
+        tracked.write_text("synthetic", encoding="utf-8")
+        os.link(tracked, build / "alias")
+        self.assertEqual(self.root_a, load_policy(self.cfg, "a").workspace)
+
+        self.write_config({"a": {"workspace": str(self.root_a), "read_only": True, "exclude": ["build"]}})
+        with self.assertRaisesRegex(SandboxError, "hardlinks outside"):
+            load_policy(self.cfg, "a", workspace_only=True)
 
     def test_workspace_root_denied(self):
         self.write_config({"a": {"workspace": "/", "read_only": False}})

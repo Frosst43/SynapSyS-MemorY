@@ -4,11 +4,11 @@
 
 ## Estado: 1.0.0-rc1, NO estable
 
-Esta candidata corrige fallos reproducidos sobre `1350b71` (dev5). No se ha
-fusionado en `main` ni se ha certificado una integracion con un agente real.
-El aislamiento de memoria NO revoca por si solo los permisos de archivos de
-un proceso ya lanzado. El cierre coordinado del sandbox al cambiar de
-proyecto sigue siendo un bloqueo de salida.
+Esta candidata corrige fallos reproducidos sobre `1350b71` (dev5). La rama
+experimental ha validado el cierre coordinado del sandbox al cambiar de
+proyecto y las consultas MCP de OpenCode con Ollama y Strata en proyectos de
+prueba. La validación del despliegue para uso diario sigue pendiente.
+[Pilotos y criterios de cierre](docs/PERSISTENCE_PILOT.md#remaining-v1-acceptance)
 
 No incluye LLM, embeddings, Ollama, inferencia ni GPU. La memoria no decide
 que es verdad: guarda y consulta datos suministrados por clientes autorizados.
@@ -21,7 +21,8 @@ que es verdad: guarda y consulta datos suministrados por clientes autorizados.
 - Concesiones revocables y limites de sesiones, conexiones y handlers.
 - Migraciones atomicas, backups privados y consistentes, auditoria sin cuerpos.
 - Lanzador Bubblewrap experimental con red desactivada y un unico workspace.
-- Rechazo de directorios solapados, hardlinks, archivos especiales y politicas ambiguas.
+- Rechazo de directorios solapados, enlaces duros fuera del árbol auditado,
+  archivos especiales y políticas ambiguas.
 
 ## Datos privados frente al codigo publicado
 
@@ -54,6 +55,9 @@ privada temporal fuera del repositorio. Un requisito ausente se informa como
 BLOCKED, nunca como PASS. Aunque los componentes pasen, muestra los gates
 manuales pendientes y no certifica una version estable.
 
+La rama experimental incluye una unidad de usuario para systemd y pruebas
+de recuperacion y lectura MCP. [Pilotos, despliegue y pendientes de v1](docs/PERSISTENCE_PILOT.md)
+
 ## Seguridad y limites de uso
 
 Usa un controlador de confianza, credenciales privadas y separacion OS del
@@ -66,9 +70,9 @@ privilegios especiales. La colaboracion padre/hijo sigue aplazada.
 
 Las comprobaciones de rutas y enlaces son un preflight, no una defensa
 contra un proceso no aislado del mismo UID que cambie el host concurrentemente.
-Bubblewrap no es por si solo un producto de seguridad completo. La red
-bloqueada impide conectarse directamente al Ollama del host; no desactives el
- aislamiento para eludirlo. Falta integrar un acceso explicitamente autorizado.
+Bubblewrap mantiene la red aislada. El controlador permite autorizar el chat
+de un modelo local mediante un socket privado de la sesión.
+[Acceso restringido al runtime local](docs/PERSISTENCE_PILOT.md#restricted-local-runtime-access)
 
 `backup` es una operacion de administrador que incluye TODA la base, no una
 exportacion por proyecto. No se expone a herramientas MCP ni clientes del
